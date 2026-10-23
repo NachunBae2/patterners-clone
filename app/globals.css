@@ -57,6 +57,22 @@
   --ring: var(--seed-color-stroke-focus-ring);
 }
 
+/* Same lime values in Lab, as the reference defines them (keeps gradients identical). */
+@supports (color: lab(0% 0 0)) {
+  :root {
+    --seed-color-palette-lime-100: lab(97.4614% -6.81037 8.50461);
+    --seed-color-palette-lime-200: lab(94.3246% -13.4733 17.2217);
+    --seed-color-palette-lime-300: lab(89.5318% -22.1031 29.3365);
+    --seed-color-palette-lime-400: lab(81.7961% -30.36 42.5176);
+    --seed-color-palette-lime-500: lab(71.5975% -36.1306 54.414);
+    --seed-color-palette-lime-600: lab(57.5796% -34.6511 55.2406);
+    --seed-color-palette-lime-700: lab(48.0958% -30.4271 48.7149);
+    --seed-color-palette-lime-800: lab(38.612% -26.2026 42.1998);
+    --seed-color-palette-lime-900: lab(29.0881% -21.0211 33.3375);
+    --seed-color-palette-lime-1000: lab(16.0277% -14.7336 21.2493);
+  }
+}
+
 @layer base {
   * {
     border-color: var(--border);
