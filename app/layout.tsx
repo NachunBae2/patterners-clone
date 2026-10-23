@@ -5,6 +5,8 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "패터너스 | PATTERNERS",
   description: "코바늘·대바늘 도안을 웹에서 그리는 패터너스. 기호 배치, 차트 편집, 페이퍼까지 한곳에서 완성하세요.",
+  // Clone for study: keep it out of search engines.
+  robots: { index: false, follow: false },
 };
 
 export const viewport: Viewport = {
