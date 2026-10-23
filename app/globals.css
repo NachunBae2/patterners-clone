@@ -1,0 +1,125 @@
+/* Layer order matches the reference build: Tailwind theme/base → SEED base →
+   landing components → SEED components → utilities. */
+@layer theme, base, seed-base, components, seed-components, utilities;
+
+@import "tailwindcss";
+@import "@seed-design/css/all.layered.css";
+@import "@seed-design/tailwind4-theme";
+
+@custom-variant data-open (&:where([data-state="open"]), &:where([data-open]:not([data-open="false"])));
+@custom-variant data-closed (&:where([data-state="closed"]), &:where([data-closed]:not([data-closed="false"])));
+
+@theme {
+  --default-font-family: var(--seed-font-family);
+  --font-sans: var(--seed-font-family);
+  --font-weight-medium: var(--seed-font-weight-medium);
+  --font-weight-bold: var(--seed-font-weight-bold);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+}
+
+/* Brand: SEED carrot → lime. */
+:root {
+  --seed-color-palette-lime-100: #effbe7;
+  --seed-color-palette-lime-200: #def6cd;
+  --seed-color-palette-lime-300: #c6eda7;
+  --seed-color-palette-lime-400: #a5da78;
+  --seed-color-palette-lime-500: #81c042;
+  --seed-color-palette-lime-600: #5f9915;
+  --seed-color-palette-lime-700: #4d7f0c;
+  --seed-color-palette-lime-800: #3c6505;
+  --seed-color-palette-lime-900: #2d4d07;
+  --seed-color-palette-lime-1000: #192d03;
+  --seed-color-fg-brand: var(--seed-color-palette-lime-700);
+  --seed-color-fg-brand-contrast: var(--seed-color-palette-lime-800);
+  --seed-color-bg-brand-solid: var(--seed-color-palette-lime-600);
+  --seed-color-bg-brand-solid-pressed: var(--seed-color-palette-lime-700);
+  --seed-color-bg-brand-weak: var(--seed-color-palette-lime-100);
+  --seed-color-bg-brand-weak-pressed: var(--seed-color-palette-lime-200);
+  --seed-color-stroke-brand-solid: var(--seed-color-palette-lime-700);
+  --seed-color-stroke-brand-weak: var(--seed-color-palette-lime-300);
+
+  --background: var(--seed-color-bg-layer-default);
+  --foreground: var(--seed-color-fg-neutral);
+  --muted: var(--seed-color-bg-layer-fill);
+  --muted-foreground: var(--seed-color-fg-neutral-muted);
+  --border: var(--seed-color-stroke-neutral-muted);
+  --ring: var(--seed-color-stroke-focus-ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  html {
+    font-family: var(--seed-font-family);
+    scroll-behavior: smooth;
+    touch-action: pan-x pan-y;
+    text-size-adjust: 100%;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    user-select: none;
+    font-family: var(--seed-font-family);
+    letter-spacing: -0.02em;
+    -webkit-touch-callout: none;
+  }
+}
+
+@utility page-shell {
+  width: 100%;
+  max-width: 1200px;
+  padding-inline: calc(var(--spacing) * 6);
+  margin-inline: auto;
+  @media (min-width: 48rem) {
+    padding-inline: calc(var(--spacing) * 10);
+  }
+}
+
+@utility page-shell-wide {
+  width: 100%;
+  max-width: 1400px;
+  padding-inline: calc(var(--spacing) * 6);
+  margin-inline: auto;
+  @media (min-width: 48rem) {
+    padding-inline: calc(var(--spacing) * 10);
+  }
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* FAQ panel: open/close by grid rows instead of animating height. */
+.lp-accordion-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.2s ease-out;
+}
+.lp-accordion-panel[data-state="open"] {
+  grid-template-rows: 1fr;
+}
+.lp-accordion-panel > div {
+  min-height: 0;
+  overflow: hidden;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-accordion-panel {
+    transition: none;
+  }
+}
+
+@import "./landing.css" layer(components);
