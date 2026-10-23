@@ -1,0 +1,15 @@
+/* 배색·방안 editor: rules the reference keeps in its global stylesheet (scoped here). */
+[data-grid-toolbar] .seed-action-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px !important;
+}
+[data-grid-toolbar] .seed-action-button:disabled {
+  color: var(--seed-color-fg-neutral-subtle);
+}
+@media (pointer: coarse) {
+  [data-grid-toolbar] button {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+  }
+}

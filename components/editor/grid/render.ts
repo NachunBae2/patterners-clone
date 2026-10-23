@@ -2,13 +2,11 @@
 
 // Drawing the chart: <canvas> for the editor, SVG strings for export and thumbnails.
 import type { GridMode, GridPage, View } from "@/lib/types";
-import { type Block, type FloatRun, type GridDoc, type Rect, clamp, filetInk, finishedSize, rowSide, stitchCounts } from "./model";
+import { type Block, type FloatRun, type GridDoc, type Numbering, type Rect, clamp, filetInk, finishedSize, numberingOf, rowNoOf, rowSides, stNoOf, stitchCounts } from "./model";
 
-export const CELL = 20; // world units per stitch width
-export const GUTTER = 34; // row-number gutter on each side
-export const FOOT = 26; // stitch-number gutter below
+export const CELL = 16; // world units per stitch width (100% zoom = 16px cells)
 
-const INK_MUTED = "#6b6f76";
+const INK_MUTED = "#757575";
 const BRAND = "#5f9915";
 const FONT = '"Pretendard Variable", Pretendard, -apple-system, sans-serif';
 
@@ -30,8 +28,7 @@ export type DrawArgs = {
   mode: GridMode;
   aspect: number;
   safe: { sts: number; rows: number };
-  working: "flat" | "round";
-  hand: "right" | "left";
+  numbering: Numbering;
   floats: FloatRun[] | null;
   hover: { c: number; r: number } | null;
   sel: Rect | null;
@@ -66,9 +63,10 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
 
   const cw = CELL * view.zoom;
   const ch = CELL * aspect * view.zoom;
+  // cell edges sit on exact (unsnapped) positions; fills are snapped to device pixels
+  const X = (c: number) => view.x + c * cw;
+  const Y = (r: number) => view.y + r * ch;
   const px = (v: number) => Math.round(v * dpr) / dpr;
-  const X = (c: number) => px(view.x + c * cw);
-  const Y = (r: number) => px(view.y + r * ch);
 
   const c0 = clamp(Math.floor(-view.x / cw), 0, cols);
   const c1 = clamp(Math.ceil((a.width - view.x) / cw), 0, cols);
@@ -78,13 +76,12 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
   const filet = mode === "filet";
   const ink = filetInk(yarns);
 
-  // chart surface + subtle shadow
+  // chart surface + soft shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.08)";
+  ctx.shadowColor = "rgba(0,0,0,0.11)";
   ctx.shadowBlur = 12;
-  ctx.shadowOffsetY = 2;
   ctx.fillStyle = filet ? "#ffffff" : yarns[0] ?? "#ffffff";
-  ctx.fillRect(X(0), Y(0), X(cols) - X(0), Y(rows) - Y(0));
+  ctx.fillRect(X(0), Y(0), cols * cw, rows * ch);
   ctx.restore();
 
   // cells
@@ -96,17 +93,15 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
         const v = cells[r * cols + c];
         const x = X(c);
         const y = Y(r);
-        const w = X(c + 1) - x;
-        const h = Y(r + 1) - y;
         if (v > 0) {
           ctx.fillStyle = ink;
-          ctx.fillRect(x + inset, y + inset, w - inset * 2, h - inset * 2);
+          ctx.fillRect(x + inset, y + inset, cw - inset * 2, ch - inset * 2);
         } else if (open) {
           ctx.strokeStyle = ink;
           ctx.globalAlpha = 0.28;
-          ctx.lineWidth = Math.max(1 / dpr, Math.min(w, h) * 0.06);
-          const m = Math.min(w, h) * 0.24;
-          ctx.strokeRect(x + m, y + m, w - m * 2, h - m * 2);
+          ctx.lineWidth = Math.max(1 / dpr, Math.min(cw, ch) * 0.06);
+          const m = Math.min(cw, ch) * 0.24;
+          ctx.strokeRect(x + m, y + m, cw - m * 2, ch - m * 2);
           ctx.globalAlpha = 1;
         }
       }
@@ -119,7 +114,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
         while (e < c1 && cells[r * cols + e] === v) e++;
         if (v > 0) {
           ctx.fillStyle = yarns[v] ?? yarns[0];
-          ctx.fillRect(X(c), Y(r), X(e) - X(c), Y(r + 1) - Y(r));
+          ctx.fillRect(px(X(c)), px(Y(r)), px(X(e)) - px(X(c)), px(Y(r + 1)) - px(Y(r)));
         }
         c = e;
       }
@@ -137,7 +132,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
         if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) continue;
         const v = block.cells[r * block.cols + c];
         ctx.fillStyle = filet ? (v > 0 ? ink : "#ffffff") : v > 0 ? yarns[v] ?? yarns[0] : yarns[0];
-        ctx.fillRect(X(cc), Y(rr), X(cc + 1) - X(cc), Y(rr + 1) - Y(rr));
+        ctx.fillRect(px(X(cc)), px(Y(rr)), px(X(cc + 1)) - px(X(cc)), px(Y(rr + 1)) - px(Y(rr)));
       }
     ctx.globalAlpha = 1;
   }
@@ -167,35 +162,37 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
     ctx.restore();
   }
 
-  // grid lines (counted from bottom-right, bold every 5 / 10)
-  const lineColor = filet ? "40,48,64" : "30,32,36";
-  const vline = (c: number, w: number, alpha: number) => {
-    ctx.fillStyle = `rgba(${lineColor},${alpha})`;
-    ctx.fillRect(X(c) - w / 2, Y(r0), w, Y(r1) - Y(r0));
-  };
-  const hline = (r: number, w: number, alpha: number) => {
-    ctx.fillStyle = `rgba(${lineColor},${alpha})`;
-    ctx.fillRect(X(c0), Y(r) - w / 2, X(c1) - X(c0), w);
-  };
-  const thin = 1 / dpr;
-  const strong = Math.max(2 / dpr, 1.25);
-  const showThinV = cw >= 5;
-  const showThinH = ch >= 5;
-  for (let c = c0; c <= c1; c++) {
-    const k = cols - c;
-    if (k % 10 === 0) vline(c, strong, 0.55);
-    else if (k % 5 === 0) vline(c, 1, cw >= 3 ? 0.32 : 0.2);
-    else if (showThinV) vline(c, thin, 0.16);
+  // grid lines: hairlines every cell, heavier every 10 (counted from stitch / row 1)
+  const n = a.numbering;
+  const lineRGB = filet ? "40,48,64" : "0,0,0";
+  const top = Y(r0);
+  const bottom = Y(r1);
+  const left = X(c0);
+  const right = X(c1);
+  const showThinV = cw >= 4;
+  const showThinH = ch >= 4;
+  const bold = (k: number) => k % 10 === 0;
+  ctx.fillStyle = `rgba(${lineRGB},0.16)`;
+  for (let c = Math.max(1, c0); c <= Math.min(cols - 1, c1); c++) {
+    const k = n.flipSts ? cols - c : c;
+    if (!bold(k) && showThinV) ctx.fillRect(X(c) - 0.5, top, 1, bottom - top);
   }
-  for (let r = r0; r <= r1; r++) {
-    const k = rows - r;
-    if (k % 10 === 0) hline(r, strong, 0.55);
-    else if (k % 5 === 0) hline(r, 1, ch >= 3 ? 0.32 : 0.2);
-    else if (showThinH) hline(r, thin, 0.16);
+  for (let r = Math.max(1, r0); r <= Math.min(rows - 1, r1); r++) {
+    const k = n.flipRows ? rows - r : r;
+    if (!bold(k) && showThinH) ctx.fillRect(left, Y(r) - 0.5, right - left, 1);
   }
-  ctx.strokeStyle = `rgba(${lineColor},0.7)`;
-  ctx.lineWidth = strong;
-  ctx.strokeRect(X(0), Y(0), X(cols) - X(0), Y(rows) - Y(0));
+  ctx.fillStyle = `rgba(${lineRGB},0.7)`;
+  for (let c = Math.max(1, c0); c <= Math.min(cols - 1, c1); c++) {
+    const k = n.flipSts ? cols - c : c;
+    if (bold(k)) ctx.fillRect(X(c) - 0.75, top, 1.5, bottom - top);
+  }
+  for (let r = Math.max(1, r0); r <= Math.min(rows - 1, r1); r++) {
+    const k = n.flipRows ? rows - r : r;
+    if (bold(k)) ctx.fillRect(left, Y(r) - 0.75, right - left, 1.5);
+  }
+  ctx.strokeStyle = `rgba(${lineRGB},0.83)`;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(X(0), Y(0), cols * cw, rows * ch);
 
   // long floats
   if (a.floats?.length) {
@@ -204,7 +201,7 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
       const x = X(f.c0);
       const w = X(f.c1) - x;
       const y = Y(f.r);
-      const h = Y(f.r + 1) - y;
+      const h = ch;
       // a red strand across the run, with end ticks, reads as "yarn carried behind"
       const t = clamp(h * 0.14, 1.5, 3);
       const my = y + h / 2 - t / 2;
@@ -221,11 +218,11 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
   if (a.hover && a.hover.r >= 0 && a.hover.r < rows) {
     const { c, r } = a.hover;
     ctx.fillStyle = "rgba(129,192,66,0.16)";
-    ctx.fillRect(X(0), Y(r), X(cols) - X(0), Y(r + 1) - Y(r));
+    ctx.fillRect(X(0), Y(r), cols * cw, ch);
     if (c >= 0 && c < cols) {
       ctx.strokeStyle = BRAND;
       ctx.lineWidth = 2;
-      ctx.strokeRect(X(c) + 1, Y(r) + 1, X(c + 1) - X(c) - 2, Y(r + 1) - Y(r) - 2);
+      ctx.strokeRect(X(c) + 1, Y(r) + 1, cw - 2, ch - 2);
     }
   }
 
@@ -235,50 +232,59 @@ export function drawChart(ctx: CanvasRenderingContext2D, a: DrawArgs) {
     const x = X(c);
     const y = Y(r);
     ctx.fillStyle = "rgba(95,153,21,0.10)";
-    ctx.fillRect(x, y, X(c + w) - x, Y(r + h) - y);
+    ctx.fillRect(x, y, w * cw, h * ch);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([]);
     ctx.strokeStyle = "#ffffff";
-    ctx.strokeRect(x, y, X(c + w) - x, Y(r + h) - y);
+    ctx.strokeRect(x, y, w * cw, h * ch);
     ctx.setLineDash([5, 4]);
     ctx.strokeStyle = "#1a1c20";
-    ctx.strokeRect(x, y, X(c + w) - x, Y(r + h) - y);
+    ctx.strokeRect(x, y, w * cw, h * ch);
     ctx.setLineDash([]);
   }
 
   // numbers
+  const gap = 6 + Math.max(0, n.offset);
+  const fs = 12;
   ctx.textBaseline = "middle";
   const rowStep = ch >= 11 ? 1 : ch * 5 >= 11 ? 5 : 10;
-  const fsR = clamp(ch * 0.6, 9, 12);
   for (let r = r0; r < r1; r++) {
-    const no = rows - r;
+    const no = rowNoOf(r, rows, n);
     const hovered = a.hover?.r === r;
     if (no % rowStep !== 0 && no !== 1 && !hovered) continue;
-    const side = rowSide(no, a.working, a.hand);
-    const yy = (Y(r) + Y(r + 1)) / 2;
-    ctx.font = `${hovered ? 700 : 500} ${fsR}px ${FONT}`;
+    const sides = rowSides(no, n);
+    if (hovered && !sides.length) sides.push(n.flipSts ? "right" : "left");
+    const yy = Math.round(Y(r) + ch / 2);
+    ctx.font = `${hovered ? 700 : 500} ${fs}px ${FONT}`;
     const tx = String(no);
     const tw = ctx.measureText(tx).width;
-    const xx = side === "right" ? X(cols) + 6 : X(0) - 6 - tw;
-    if (hovered) {
-      ctx.fillStyle = BRAND;
-      roundRect(ctx, xx - 4, yy - fsR * 0.75, tw + 8, fsR * 1.5, 4);
-      ctx.fillStyle = "#fff";
-    } else ctx.fillStyle = INK_MUTED;
-    ctx.fillText(tx, xx, yy);
+    for (const side of sides) {
+      const xx = side === "right" ? X(cols) + gap : X(0) - gap - tw;
+      if (hovered) {
+        ctx.fillStyle = BRAND;
+        roundRect(ctx, xx - 4, yy - fs * 0.75, tw + 8, fs * 1.5, 4);
+        ctx.fillStyle = "#fff";
+      } else ctx.fillStyle = INK_MUTED;
+      ctx.fillText(tx, xx, yy);
+    }
   }
-  const stStep = cw >= 20 ? 1 : cw * 5 >= 20 ? 5 : 10;
-  const fsS = clamp(cw * 0.5, 9, 11);
-  ctx.font = `500 ${fsS}px ${FONT}`;
+  const stStep = cw >= 16 ? 1 : cw * 5 >= 16 ? 5 : 10;
   ctx.textAlign = "center";
-  ctx.textBaseline = "top";
   for (let c = c0; c < c1; c++) {
-    const no = a.hand === "right" ? cols - c : c + 1;
+    const no = stNoOf(c, cols, n);
     const hovered = a.hover?.c === c && a.hover.r >= 0 && a.hover.r < rows;
-    if (no % stStep !== 0 && no !== 1 && !hovered) continue;
-    ctx.fillStyle = hovered ? BRAND : INK_MUTED;
-    ctx.font = `${hovered ? 700 : 500} ${fsS}px ${FONT}`;
-    ctx.fillText(String(no), (X(c) + X(c + 1)) / 2, Y(rows) + 5);
+    const xx = X(c) + cw / 2;
+    for (const [every, y] of [
+      [n.bottom, Math.round(Y(rows) + gap + fs / 2)],
+      [n.top, Math.round(Y(0) - gap - fs / 2)],
+    ] as const) {
+      if (every <= 0 && !(hovered && y > Y(0))) continue;
+      const step = Math.max(stStep, every);
+      if (no % step !== 0 && no !== 1 && !hovered) continue;
+      ctx.fillStyle = hovered ? BRAND : INK_MUTED;
+      ctx.font = `${hovered ? 700 : 500} ${fs}px ${FONT}`;
+      ctx.fillText(String(no), xx, y);
+    }
   }
   ctx.textAlign = "start";
 }
@@ -370,8 +376,7 @@ export function chartSvg(doc: GridDoc, page: GridPage, aspect: number) {
   const ox = M + gut;
   const oy = M;
   const filet = doc.mode === "filet";
-  const working = doc.working ?? "flat";
-  const hand = doc.hand ?? "right";
+  const nb = numberingOf(doc);
   const parts: string[] = [];
 
   parts.push(`<rect x="${ox}" y="${oy}" width="${f1(chartW)}" height="${f1(chartH)}" fill="${filet ? "#ffffff" : doc.yarns[0]}"/>`);
@@ -382,12 +387,12 @@ export function chartSvg(doc: GridDoc, page: GridPage, aspect: number) {
   const mid: string[] = [];
   const bold: string[] = [];
   for (let c = 0; c <= cols; c++) {
-    const k = cols - c;
+    const k = nb.flipSts ? cols - c : c;
     const d = `M${f1(ox + c * cs)} ${oy}V${f1(oy + chartH)}`;
     (k % 10 === 0 ? bold : k % 5 === 0 ? mid : thin).push(d);
   }
   for (let r = 0; r <= rows; r++) {
-    const k = rows - r;
+    const k = nb.flipRows ? rows - r : r;
     const d = `M${ox} ${f1(oy + r * csh)}H${f1(ox + chartW)}`;
     (k % 10 === 0 ? bold : k % 5 === 0 ? mid : thin).push(d);
   }
@@ -401,11 +406,11 @@ export function chartSvg(doc: GridDoc, page: GridPage, aspect: number) {
   const rowStep = csh >= 9 ? 1 : 5;
   const nums: string[] = [];
   for (let r = 0; r < rows; r++) {
-    const no = rows - r;
+    const no = rowNoOf(r, rows, nb);
     if (no % rowStep !== 0 && no !== 1) continue;
-    const side = rowSide(no, working, hand);
     const y = oy + (r + 0.5) * csh;
-    nums.push(
+    for (const side of rowSides(no, nb))
+      nums.push(
       side === "right"
         ? `<text x="${f1(ox + chartW + 5)}" y="${f1(y)}" dominant-baseline="central" font-size="${f1(fsR)}">${no}</text>`
         : `<text x="${f1(ox - 5)}" y="${f1(y)}" dominant-baseline="central" text-anchor="end" font-size="${f1(fsR)}">${no}</text>`,
@@ -414,14 +419,14 @@ export function chartSvg(doc: GridDoc, page: GridPage, aspect: number) {
   const stStep = cs >= 16 ? 1 : 5;
   const fsS = clamp(cs * 0.55, 6, 10);
   for (let c = 0; c < cols; c++) {
-    const no = hand === "right" ? cols - c : c + 1;
-    if (no % stStep !== 0 && no !== 1) continue;
+    const no = stNoOf(c, cols, nb);
+    if (nb.bottom <= 0 || (no % Math.max(stStep, nb.bottom) !== 0 && no !== 1)) continue;
     nums.push(`<text x="${f1(ox + (c + 0.5) * cs)}" y="${f1(oy + chartH + 5 + fsS * 0.8)}" text-anchor="middle" font-size="${f1(fsS)}">${no}</text>`);
   }
   parts.push(`<g fill="${INK_MUTED}" font-family='${FONT}' font-weight="500">${nums.join("")}</g>`);
 
   // legend + gauge
-  let y = oy + chartH + FOOT + 10;
+  let y = oy + chartH + 36;
   const legend: string[] = [];
   const counts = stitchCounts(page, doc.yarns.length);
   let lx = ox;

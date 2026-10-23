@@ -3,12 +3,14 @@
 // Text → cells and image → yarn colours. Runs in the browser (offscreen canvas).
 import { MAX_COLORS, MAX_DIM, clamp, cleanupCells, rgbToHex } from "./model";
 
-export type FontKey = "sans" | "serif" | "mono";
-export const FONTS: { value: FontKey; label: string; css: string }[] = [
-  { value: "sans", label: "Pretendard", css: '"Pretendard Variable", Pretendard, sans-serif' },
-  { value: "serif", label: "명조", css: '"Noto Serif KR", "Nanum Myeongjo", "AppleMyungjo", serif' },
-  { value: "mono", label: "고정폭", css: 'ui-monospace, "SF Mono", Menlo, monospace' },
+export type FontKey = "sansBold" | "sans" | "serif" | "mono";
+export const FONTS: { value: FontKey; label: string; css: string; weight: number }[] = [
+  { value: "sansBold", label: "Noto Sans KR Bold", css: '"Noto Sans KR", "Pretendard Variable", Pretendard, sans-serif', weight: 700 },
+  { value: "sans", label: "Noto Sans KR Regular", css: '"Noto Sans KR", "Pretendard Variable", Pretendard, sans-serif', weight: 400 },
+  { value: "serif", label: "Noto Serif KR", css: '"Noto Serif KR", "Nanum Myeongjo", "AppleMyungjo", serif', weight: 700 },
+  { value: "mono", label: "고정폭", css: 'ui-monospace, "SF Mono", Menlo, monospace', weight: 700 },
 ];
+const fontOf = (k: FontKey) => FONTS.find((f) => f.value === k) ?? FONTS[0];
 
 export type TextOpts = {
   text: string;
@@ -35,7 +37,7 @@ const canvas = (w: number, h: number) => {
 };
 
 const fontString = (o: Pick<TextOpts, "font" | "bold" | "italic">, px: number) =>
-  `${o.italic ? "italic " : ""}${o.bold ? 800 : 400} ${px}px ${FONTS.find((f) => f.value === o.font)!.css}`;
+  `${o.italic ? "italic " : ""}${o.bold ? 900 : fontOf(o.font).weight} ${px}px ${fontOf(o.font).css}`;
 
 export async function ensureFont(o: Pick<TextOpts, "font" | "bold" | "italic">) {
   try {
