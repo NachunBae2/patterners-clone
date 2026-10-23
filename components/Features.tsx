@@ -1,9 +1,11 @@
 "use client";
 
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { GridMock } from "./GridMock";
 import { VideoSlot } from "./VideoSlot";
 
-type Step = { label: string; clip: string; src?: string; poster?: string };
+/** video: screen recording (4:3, apparel 16:10); grid: illustrated panel instead of a clip */
+type Step = { label: string; clip: string; kind?: "video" | "video-wide" | "grid"; src?: string; poster?: string };
 type Tab = { id: string; label: string; icon: ReactNode; steps: Step[] };
 
 const icon = (children: ReactNode, active: boolean) => (
@@ -65,9 +67,9 @@ const tabs: Tab[] = [
       </>
     ),
     steps: [
-      { label: "글자로 만들기", clip: "글자나 이미지를 넣으면 칸 도안으로 바뀌어요." },
-      { label: "색 칠하기", clip: "실 색마다 몇 코가 드는지 세어 줘요." },
-      { label: "걸침 검사", clip: "걸침이 긴 곳과 1코짜리 색 구간을 찾아 줘요." },
+      { label: "글자로 만들기", clip: "글자나 이미지를 넣으면 칸 도안으로 바뀌어요.", kind: "grid" },
+      { label: "색 칠하기", clip: "실 색마다 몇 코가 드는지 세어 줘요.", kind: "grid" },
+      { label: "걸침 검사", clip: "걸침이 긴 곳과 1코짜리 색 구간을 찾아 줘요.", kind: "grid" },
     ],
   },
   {
@@ -81,10 +83,10 @@ const tabs: Tab[] = [
       </>
     ),
     steps: [
-      { label: "차트 넣기", clip: "만든 차트를 페이퍼에 넣어요." },
-      { label: "블록으로 쓰기", clip: "설명과 제작 노트를 블록으로 적어요." },
-      { label: "번역", clip: "도안 문서를 다른 언어로 옮겨요." },
-      { label: "공유·PDF", clip: "링크로 공유하거나 PDF로 내보내요." },
+      { label: "차트 넣기", clip: "내 도안에서 차트를 골라 페이퍼에 넣는 화면" },
+      { label: "블록으로 쓰기", clip: "블록을 골라 제목·글·목록·표를 쓰는 화면" },
+      { label: "번역", clip: "페이퍼를 모든 언어로 번역하고 언어를 바꿔 보는 화면" },
+      { label: "공유·PDF", clip: "공유 링크를 켜서 복사하고 PDF로 내보내는 화면" },
     ],
   },
   {
@@ -92,10 +94,10 @@ const tabs: Tab[] = [
     label: "의류 (beta)",
     icon: <path d="M8 4.5 12 6.2 16 4.5l3.2 3.4-3.2 1.3V20H8V9.2L4.8 7.9 8 4.5Z" />,
     steps: [
-      { label: "치수 넣기", clip: "치수를 넣으면 앞판·뒤판·소매 패턴이 그려져요." },
-      { label: "핏 조절", clip: "여유분을 바꿔 핏을 조절해요." },
-      { label: "게이지", clip: "게이지를 넣으면 코수·단수로 바뀌어요." },
-      { label: "도안 올리기", clip: "코바늘·대바늘 도안을 패턴 위에 올려 봐요." },
+      { label: "치수 넣기", clip: "형태와 치수를 고르자 앞판·뒤판·소매가 그려지는 화면", kind: "video-wide" },
+      { label: "핏 조절", clip: "핏과 여유량을 조절하는 화면", kind: "video-wide" },
+      { label: "게이지", clip: "게이지를 넣어 코수·단수를 보는 화면", kind: "video-wide" },
+      { label: "도안 올리기", clip: "도안 레이어를 앞판 위에 올리는 화면", kind: "video-wide" },
     ],
   },
 ];
@@ -190,9 +192,20 @@ export function Features() {
                 </div>
                 <div className="p-x3 md:p-x6">
                   <div className="mx-auto max-w-[960px]">
-                    <div className="overflow-hidden rounded-[12px] border border-stroke-neutral-muted bg-bg-layer-default">
-                      <VideoSlot key={step.label} src={step.src} poster={step.poster} label={step.clip} className="aspect-[4/3] w-full object-cover" />
-                    </div>
+                    {step.kind === "grid" ? (
+                      <GridMock step={cur} label={step.clip} />
+                    ) : (
+                      <div className="overflow-hidden rounded-[12px] border border-stroke-neutral-muted bg-bg-layer-default">
+                        <VideoSlot
+                          key={step.label}
+                          src={step.src}
+                          poster={step.poster}
+                          label={step.clip}
+                          variant={t.id === "crochet" || t.id === "knitting" ? "editor" : "canvas"}
+                          className={`${step.kind === "video-wide" ? "aspect-[16/10]" : "aspect-[4/3]"} flex w-full object-cover`}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

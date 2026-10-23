@@ -47,19 +47,13 @@ export function Faq() {
                     )}
                   </button>
                 </h3>
-                <div
-                  id={`${id}-a-${i}`}
-                  role="region"
-                  aria-labelledby={`${id}-q-${i}`}
-                  data-state={state}
-                  inert={!isOpen}
-                  className="lp-accordion-panel text-sm"
-                >
-                  <div>
+                {/* Only the open answer is rendered, like the reference accordion. */}
+                <div id={`${id}-a-${i}`} role="region" aria-labelledby={`${id}-q-${i}`} data-state={state} hidden={!isOpen} className="overflow-hidden text-sm">
+                  {isOpen && (
                     <div className="lp-body pb-x4">
                       <p>{f.a}</p>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             );
