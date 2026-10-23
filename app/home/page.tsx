@@ -303,7 +303,7 @@ function WorkCard({ w, trash, onRename }: { w: Entry; trash?: boolean; onRename:
           {CRAFT_LABEL[w.craft]} · {trash ? (daysLeft ? `${daysLeft}일 후 삭제` : "오늘 삭제") : `수정됨 ${timeAgo(w.updatedAt)}`}
         </p>
       </button>
-      <div className="absolute right-0 bottom-x1">
+      <div className="absolute right-0 bottom-1">
         <Menu
           align="end"
           trigger={({ toggle }) => (
