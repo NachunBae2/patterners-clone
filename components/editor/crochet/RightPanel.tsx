@@ -1,11 +1,11 @@
 "use client";
 
 import { memo, useMemo, useState } from "react";
-import { ChevronDown, Eye, EyeOff, FlipH, FlipV, Group as GroupIcon, Plus, Trash } from "@/components/app/icons";
-import { ColorSwatches, IconButton, NumberField, Segmented, cx } from "@/components/app/ui";
+import { ColorSwatches, IconButton, Menu, NumberField, Segmented, cx, type MenuItem } from "@/components/app/ui";
 import type { CrochetItem, CrochetLayer, GatherItem, StitchItem, StrokeItem, TextItem } from "@/lib/types";
 import { INK, getSymbol } from "@/lib/symbols/crochet";
-import { ChevronUp, Ungroup } from "./icons";
+import { BTN, el, sab } from "./seed";
+import { ChevronDown, ChevronUp, Eye, EyeOff, FlipHorizontal, FlipVertical, FolderPlus, Group as GroupIcon, Plus, RotateCcwClock, Ruler, Trash2, Ungroup } from "./uiIcons";
 
 export const SWATCHES = ["#1f1f1f", "#d64545", "#e8833a", "#d9a400", "#4f9d2d", "#2e86c1", "#6c4bc4", "#c2408f", "#8a6a4f", "#9aa0a6"];
 
@@ -42,26 +42,125 @@ type Props = {
   layer: LayerActions;
   selected: Sel[];
   props: PropActions;
+  savedAt: number;
+  zoom: number;
+  zoomItems: MenuItem[];
+  onSoon: (what: string) => void;
 };
 
+const savedFmt = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: true });
+
+/** Right panel: save time + zoom, selection properties, layers (단) and the layer bar. */
 export const RightPanel = memo(function RightPanel(p: Props) {
+  const active = p.layers.find((l) => l.id === p.activeLayerId);
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <Layers {...p} />
-      <div className="min-h-0 flex-1 overflow-y-auto border-t border-stroke-neutral-muted">
-        <Properties {...p} />
+    <aside data-tour="layer-panel" aria-label="레이어와 속성" className="relative flex h-full w-60 shrink-0 flex-col overflow-hidden border-l border-stroke-neutral-muted bg-bg-layer-default">
+      <div className="flex max-h-[60%] min-h-0 shrink-0 flex-col">
+        <div className="flex h-10 shrink-0 items-center justify-between gap-x2 border-b border-stroke-neutral-muted px-x3">
+          <button
+            type="button"
+            title="버전 기록"
+            aria-label="버전 기록"
+            onClick={() => p.onSoon("버전 기록")}
+            className="flex max-w-[10rem] min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-bg-layer-default-pressed/70"
+          >
+            <RotateCcwClock className="size-3.5 shrink-0 text-fg-neutral-muted" />
+            {/* layout-audit-ignore: tiny-text — reference save-time label is 11px */}
+            <span className="min-w-0 truncate text-[11px] leading-tight text-fg-neutral-muted" data-testid="saved-at">{savedFmt.format(p.savedAt)}</span>
+          </button>
+          <Menu
+            align="end"
+            items={p.zoomItems}
+            trigger={({ open, toggle }) => (
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={open}
+                aria-label="배율"
+                title="배율"
+                onClick={toggle}
+                data-testid="zoom-level"
+                className="t2-medium flex h-7 shrink-0 items-center gap-x0_5 rounded-r1 px-x1_5 text-fg-neutral-muted tabular-nums hover:bg-bg-layer-default-pressed hover:text-fg-neutral focus-visible:outline-2 focus-visible:outline-stroke-focus-ring"
+              >
+                {Math.round(p.zoom * 100)}%
+                <ChevronDown className="size-3" />
+              </button>
+            )}
+          />
+        </div>
+        {p.selected.length > 0 && (
+          <div className="min-h-0 overflow-y-auto overscroll-contain border-b border-stroke-neutral-muted [scrollbar-width:thin]">
+            <Properties {...p} />
+          </div>
+        )}
       </div>
-    </div>
+      <div className="flex h-10 shrink-0 items-center gap-x2 border-b border-stroke-neutral-muted px-x3">
+        <span className="t2-bold text-fg-neutral">레이어</span>
+        <div className="ml-auto" title="활성 폴더·단만 편집">
+          <label className="seed-switch__root seed-switch__root--size_16 peer shrink-0" data-slot="switch" data-size="sm" data-checked={p.activeOnly ? "" : undefined}>
+            <div
+              aria-hidden="true"
+              className="seed-switchmark__root seed-switchmark__root--tone_brand seed-switchmark__root--size_16 seed-scale-feedback"
+              data-checked={p.activeOnly ? "" : undefined}
+              style={el(26, 16)}
+            >
+              <div aria-hidden="true" className="seed-switchmark__thumb seed-switchmark__thumb--tone_brand seed-switchmark__thumb--size_16" data-checked={p.activeOnly ? "" : undefined} />
+            </div>
+            <input role="switch" type="checkbox" aria-label="활성 폴더·단만 편집" checked={p.activeOnly} onChange={(e) => p.onActiveOnly(e.target.checked)} className="sr-only" />
+          </label>
+        </div>
+      </div>
+      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <LayerList {...p} />
+        <div className="h-10" aria-hidden="true" />
+      </div>
+      <div className="flex h-10 items-center gap-1 border-t border-stroke-neutral-muted px-2">
+        <div className="flex items-center gap-1.5">
+          <div className="relative flex">
+            <button type="button" aria-label="배경색" title="배경색" onClick={() => p.onSoon("배경색")} className="relative size-4 shrink-0 overflow-hidden rounded border border-stroke-neutral-muted/80 shadow-sm">
+              <span className="absolute inset-0 bg-white" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="flex h-7 w-16 min-w-0 items-center gap-1 rounded-r2 bg-bg-layer-fill px-1.5 select-none" title="배경 투명도">
+            <input readOnly inputMode="decimal" aria-label="배경 투명도" value="100" className="pointer-events-none w-full min-w-0 flex-1 bg-transparent text-right text-[12px] leading-none text-fg-neutral tabular-nums outline-none" type="text" />
+            {/* layout-audit-ignore: tiny-text — unit suffix next to a 12px value, as in the reference */}
+            <span className="shrink-0 text-[10px] text-fg-neutral-muted" aria-hidden="true">%</span>
+          </div>
+        </div>
+        <button type="button" aria-label="기호 높이" title="기호 높이" onClick={() => p.onSoon("기호 높이")} className={cx(sab("ghost"), BTN, "relative size-8 px-0")} style={el(32, 32)}>
+          <Ruler className="size-4" />
+        </button>
+        <div className="ml-auto flex items-center gap-0.5">
+          <button type="button" aria-label="폴더 추가" title="폴더 추가" onClick={() => p.onSoon("폴더")} className={cx(sab("ghost"), BTN, "size-8 px-0")} style={el(32, 32)}>
+            <FolderPlus className="size-4" />
+          </button>
+          <button type="button" aria-label="레이어 추가" title="레이어(단) 추가" onClick={p.layer.add} className={cx(sab("ghost"), BTN, "size-8 px-0")} style={el(32, 32)}>
+            <Plus className="size-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="레이어 삭제"
+            title="선택한 레이어 삭제"
+            disabled={!active || p.layers.length <= 1}
+            onClick={() => active && p.layer.remove(active.id)}
+            className="flex size-8 items-center justify-center rounded-md text-fg-neutral-muted transition-colors hover:bg-bg-layer-default-pressed hover:text-fg-critical disabled:opacity-40"
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </div>
+      </div>
+    </aside>
   );
 });
 
 // ---------- layers ----------
 
-function Layers({ layers, activeLayerId, activeOnly, onActiveOnly, layer }: Props) {
+function LayerList({ layers, activeLayerId, layer }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
+  const [colorFor, setColorFor] = useState<string | null>(null);
   // displayed top-most first
   const rows = useMemo(() => layers.map((l, i) => ({ l, i })).reverse(), [layers]);
 
@@ -70,151 +169,142 @@ function Layers({ layers, activeLayerId, activeOnly, onActiveOnly, layer }: Prop
     setEditing(null);
   };
 
+  if (!rows.length) return null;
   return (
-    <section className="flex max-h-[46%] min-h-[150px] flex-col" aria-label="레이어">
-      <div className="flex items-center justify-between px-x3 pt-x3 pb-x1_5">
-        <h2 className="text-[0.8125rem] font-bold text-fg-neutral">레이어</h2>
-        <IconButton label="레이어 추가" size="sm" onClick={layer.add}>
-          <Plus />
-        </IconButton>
-      </div>
-      <ul className="min-h-0 flex-1 overflow-y-auto px-x2" role="listbox" aria-label="레이어 목록">
-        {rows.map(({ l, i }) => {
-          const active = l.id === activeLayerId;
-          return (
-            <li
-              key={l.id}
-              role="option"
-              aria-selected={active}
-              draggable={editing !== l.id}
-              onDragStart={(e) => {
-                setDragId(l.id);
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("text/plain", l.id);
+    <ul role="listbox" aria-label="레이어 목록">
+      {rows.map(({ l, i }) => {
+        const active = l.id === activeLayerId;
+        return (
+          <li
+            key={l.id}
+            role="option"
+            aria-selected={active}
+            draggable={editing !== l.id}
+            onDragStart={(e) => {
+              setDragId(l.id);
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", l.id);
+            }}
+            onDragOver={(e) => {
+              if (!dragId) return;
+              e.preventDefault();
+              setOverIdx(i);
+            }}
+            onDragLeave={() => setOverIdx((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragId) layer.move(dragId, i);
+              setDragId(null);
+              setOverIdx(null);
+            }}
+            onDragEnd={() => {
+              setDragId(null);
+              setOverIdx(null);
+            }}
+            onClick={() => layer.activate(l.id)}
+            data-layer-row={l.name}
+            className={cx(
+              "group/layer relative flex h-10 cursor-pointer items-center gap-x1 border-b border-stroke-neutral-muted pr-x2 pl-x1",
+              active ? "bg-bg-brand-weak" : "hover:bg-bg-layer-default-pressed/50",
+              dragId === l.id && "opacity-40",
+              overIdx === i && dragId !== l.id && "ring-2 ring-stroke-brand-solid ring-inset",
+            )}
+          >
+            <IconButton
+              label={l.visible ? "레이어 숨기기" : "레이어 표시"}
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                layer.toggle(l.id);
               }}
-              onDragOver={(e) => {
-                if (!dragId) return;
-                e.preventDefault();
-                setOverIdx(i);
-              }}
-              onDragLeave={() => setOverIdx((v) => (v === i ? null : v))}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragId) layer.move(dragId, i);
-                setDragId(null);
-                setOverIdx(null);
-              }}
-              onDragEnd={() => {
-                setDragId(null);
-                setOverIdx(null);
-              }}
-              onClick={() => layer.activate(l.id)}
-              data-layer-row={l.name}
-              className={cx(
-                "group/layer relative flex h-10 cursor-pointer items-center gap-x1 rounded-r2 pr-x1 pl-x0_5",
-                active ? "bg-bg-layer-fill" : "hover:bg-bg-layer-fill/60",
-                dragId === l.id && "opacity-40",
-                overIdx === i && dragId !== l.id && "ring-2 ring-stroke-neutral-contrast",
-              )}
+              className={cx("[&_svg]:size-4", l.visible ? "text-fg-neutral-muted" : "text-fg-neutral-subtle")}
             >
-              {active && <span className="absolute top-2 bottom-2 left-0 w-[3px] rounded-full bg-[var(--seed-color-palette-lime-500,#7cc522)]" />}
-              <IconButton
-                label={l.visible ? "레이어 숨기기" : "레이어 표시"}
-                size="sm"
+              {l.visible ? <Eye /> : <EyeOff />}
+            </IconButton>
+            <button
+              type="button"
+              aria-label={`${l.name} 새로 놓는 코 색`}
+              title="새로 놓는 코 색"
+              onClick={(e) => {
+                e.stopPropagation();
+                layer.activate(l.id);
+                setColorFor((v) => (v === l.id ? null : l.id));
+              }}
+              className="size-3 shrink-0 rounded-full border border-black/10"
+              style={{ background: l.color ?? INK }}
+            />
+            {editing === l.id ? (
+              <input
+                autoFocus
+                aria-label="레이어 이름"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={commit}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commit();
+                  if (e.key === "Escape") setEditing(null);
+                  e.stopPropagation();
+                }}
+                className="h-7 min-w-0 flex-1 rounded-r1_5 border border-stroke-neutral-contrast bg-bg-layer-default px-x1_5 text-[13px] outline-none"
+              />
+            ) : (
+              <span
+                className={cx("min-w-0 flex-1 truncate text-[13px]", active ? "font-bold text-fg-neutral" : "text-fg-neutral", !l.visible && "text-fg-neutral-subtle")}
+                title="더블클릭으로 이름 변경"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  setDraft(l.name);
+                  setEditing(l.id);
+                }}
+              >
+                {l.name}
+              </span>
+            )}
+            <span className="text-[12px] text-fg-neutral-subtle tabular-nums group-hover/layer:hidden">{l.items.length || ""}</span>
+            <span className="hidden items-center group-hover/layer:flex">
+              <button
+                type="button"
+                aria-label="위로"
+                title="위로"
+                disabled={i === layers.length - 1}
                 onClick={(e) => {
                   e.stopPropagation();
-                  layer.toggle(l.id);
+                  layer.move(l.id, i + 1);
                 }}
-                className={cx("ml-x1", !l.visible && "text-fg-neutral-subtle")}
+                className="inline-flex size-6 items-center justify-center rounded-r1_5 text-fg-neutral-muted hover:bg-bg-layer-default disabled:opacity-30"
               >
-                {l.visible ? <Eye /> : <EyeOff />}
-              </IconButton>
-              {l.color && <span className="size-2.5 shrink-0 rounded-full border border-black/10" style={{ background: l.color }} />}
-              {editing === l.id ? (
-                <input
-                  autoFocus
-                  aria-label="레이어 이름"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onBlur={commit}
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commit();
-                    if (e.key === "Escape") setEditing(null);
-                    e.stopPropagation();
-                  }}
-                  className="h-7 min-w-0 flex-1 rounded-r1_5 border border-stroke-neutral-contrast bg-bg-layer-default px-x1_5 text-[0.8125rem] outline-none"
-                />
-              ) : (
-                <span
-                  className={cx("min-w-0 flex-1 truncate text-[0.8125rem]", active ? "font-semibold text-fg-neutral" : "text-fg-neutral", !l.visible && "text-fg-neutral-subtle")}
-                  title="더블클릭으로 이름 변경"
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    setDraft(l.name);
-                    setEditing(l.id);
-                  }}
-                >
-                  {l.name}
-                </span>
-              )}
-              <span className="text-[0.6875rem] text-fg-neutral-subtle tabular-nums group-hover/layer:hidden">{l.items.length || ""}</span>
-              <span className="hidden items-center group-hover/layer:flex">
-                <button
-                  type="button"
-                  aria-label="위로"
-                  title="위로"
-                  disabled={i === layers.length - 1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    layer.move(l.id, i + 1);
-                  }}
-                  className="inline-flex size-6 items-center justify-center rounded-r1_5 text-fg-neutral-muted hover:bg-bg-layer-default disabled:opacity-30"
-                >
-                  <ChevronUp className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="아래로"
-                  title="아래로"
-                  disabled={i === 0}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    layer.move(l.id, i - 1);
-                  }}
-                  className="inline-flex size-6 items-center justify-center rounded-r1_5 text-fg-neutral-muted hover:bg-bg-layer-default disabled:opacity-30"
-                >
-                  <ChevronDown className="size-3.5" />
-                </button>
-                <button
-                  type="button"
-                  aria-label="레이어 삭제"
-                  title="레이어 삭제"
-                  disabled={layers.length <= 1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    layer.remove(l.id);
-                  }}
-                  className="inline-flex size-6 items-center justify-center rounded-r1_5 text-fg-neutral-muted hover:bg-bg-layer-default hover:text-fg-critical disabled:opacity-30"
-                >
-                  <Trash className="size-3.5" />
-                </button>
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      <label className="flex cursor-pointer items-center gap-x2 px-x3 py-x2 text-[0.75rem] text-fg-neutral-muted">
-        <input type="checkbox" checked={activeOnly} onChange={(e) => onActiveOnly(e.target.checked)} className="size-3.5 accent-[var(--seed-color-fg-neutral)]" />
-        활성 단만 편집
-      </label>
-    </section>
+                <ChevronUp className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="아래로"
+                title="아래로"
+                disabled={i === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  layer.move(l.id, i - 1);
+                }}
+                className="inline-flex size-6 items-center justify-center rounded-r1_5 text-fg-neutral-muted hover:bg-bg-layer-default disabled:opacity-30"
+              >
+                <ChevronDown className="size-3.5" />
+              </button>
+            </span>
+            {colorFor === l.id && (
+              <div className="absolute top-full right-x2 left-x2 z-10 rounded-r2 border border-stroke-neutral-muted bg-bg-layer-floating p-x2 shadow-s2" onClick={(e) => e.stopPropagation()}>
+                <ColorSwatches colors={SWATCHES} value={l.color ?? INK} onPick={(c) => (layer.setColor(l.id, c), setColorFor(null))} onAdd={(c) => layer.setColor(l.id, c)} />
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 // ---------- properties ----------
 
-function Properties({ selected, props, layers, activeLayerId, layer }: Props) {
+function Properties({ selected, props }: Props) {
   const summary = useMemo(() => {
     const byName = new Map<string, number>();
     const colors = new Map<string, number>();
@@ -234,24 +324,7 @@ function Properties({ selected, props, layers, activeLayerId, layer }: Props) {
     return { byName: [...byName], colors: [...colors] };
   }, [selected]);
 
-  const active = layers.find((l) => l.id === activeLayerId);
-
-  if (!selected.length) {
-    return (
-      <div className="flex flex-col gap-x4 p-x3">
-        <h2 className="text-[0.8125rem] font-bold">속성</h2>
-        <div className="rounded-r3 bg-bg-layer-fill px-x3 py-x3">
-          <p className="text-[0.8125rem] font-semibold text-fg-neutral">선택된 요소가 없어요.</p>
-          <p className="mt-x1 text-[0.75rem] leading-relaxed text-fg-neutral-muted">기호를 클릭하거나 드래그로 여러 개를 선택하면 색·회전·늘리기를 바꿀 수 있어요.</p>
-        </div>
-        {active && (
-          <Field label={`새로 놓는 코 색 · ${active.name}`}>
-            <ColorSwatches colors={SWATCHES} value={active.color ?? INK} onPick={(c) => layer.setColor(active.id, c)} onAdd={(c) => layer.setColor(active.id, c)} />
-          </Field>
-        )}
-      </div>
-    );
-  }
+  if (!selected.length) return null;
 
   const items = selected.map((s) => s.item);
   const placed = items.filter((i): i is StitchItem | GatherItem => i.type === "stitch" || i.type === "gather");
@@ -386,10 +459,10 @@ function Properties({ selected, props, layers, activeLayerId, layer }: Props) {
 
       <div className="flex flex-wrap items-center gap-x1 border-t border-stroke-neutral-muted pt-x3">
         <IconButton label="좌우 반전" shortcut="⇧H" size="sm" onClick={() => props.flip("h")}>
-          <FlipH />
+          <FlipHorizontal />
         </IconButton>
         <IconButton label="상하 반전" shortcut="⇧V" size="sm" onClick={() => props.flip("v")}>
-          <FlipV />
+          <FlipVertical />
         </IconButton>
         {grouped ? (
           <IconButton label="그룹 해제" shortcut="⇧⌘G" size="sm" onClick={props.ungroup}>
@@ -401,7 +474,7 @@ function Properties({ selected, props, layers, activeLayerId, layer }: Props) {
           </IconButton>
         )}
         <IconButton label="삭제하기" shortcut="Del" size="sm" className="ml-auto hover:text-fg-critical" onClick={props.remove}>
-          <Trash />
+          <Trash2 />
         </IconButton>
       </div>
     </div>
