@@ -60,11 +60,11 @@ const meta = (w: Work): IndexEntry => {
 
 export function emptyData(craft: Craft): WorkData {
   if (craft === "crochet") {
-    const layerId = uid();
+    // Reference defaults: no layers until the first stitch; slots sc, dc, ch, hdc, slst.
     const d: CrochetData = {
-      layers: [{ id: layerId, name: "1단", visible: true, items: [] }],
-      activeLayerId: layerId,
-      quickSlots: ["ch", "sc", "hdc", "dc", null],
+      layers: [],
+      activeLayerId: "",
+      quickSlots: ["sc", "dc", "ch", "hdc", "slst"],
       showGrid: true,
       view: { x: 0, y: 0, zoom: 1 },
     };
@@ -85,10 +85,10 @@ export function emptyData(craft: Craft): WorkData {
   const rows = 30;
   const d: GridData = {
     mode: "knit",
-    yarns: ["#ffffff", "#24365c", "#c47a5c"],
+    yarns: ["#f4f1ea", "#2b2b2b"],
     pages: [{ id: pageId, name: "페이지 1", cols, rows, cells: Array(cols * rows).fill(-1) }],
     activePageId: pageId,
-    gauge: { sts: 22, rows: 30 },
+    gauge: { sts: 20, rows: 22 },
   };
   return d;
 }
