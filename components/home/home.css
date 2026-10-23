@@ -1,0 +1,38 @@
+/* Works-home rules that aren't Tailwind utilities (ported from the reference build). */
+
+[data-home-nav-compact] .seed-side-navigation-menu-item__root {
+  height: var(--seed-dimension-x9);
+  gap: var(--seed-dimension-x2);
+}
+[data-home-nav-compact] .seed-side-navigation-menu-item__prefixIcon {
+  width: var(--seed-dimension-x4);
+  height: var(--seed-dimension-x4);
+}
+[data-home-nav-compact] .seed-side-navigation-menu-item__label {
+  padding-left: calc(var(--seed-dimension-x4) + var(--seed-dimension-x2));
+  font-size: var(--seed-font-size-t3);
+  line-height: var(--seed-line-height-t3);
+}
+
+/* "Blinking" create buttons shown while the user has no files yet. */
+@keyframes work-create-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--seed-color-bg-brand-solid) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px #0000;
+  }
+  to {
+    box-shadow: 0 0 #0000;
+  }
+}
+.work-create-pulse {
+  animation: 1.8s ease-out infinite work-create-pulse;
+  border-color: var(--seed-color-stroke-brand-solid) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-create-pulse {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--seed-color-bg-brand-solid) 30%, transparent);
+    animation: none;
+  }
+}

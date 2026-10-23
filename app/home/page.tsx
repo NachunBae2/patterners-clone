@@ -1,45 +1,75 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
-import { Files, Folder, Grid, Menu as MenuIcon, More, Pin, Plus, Search, Trash, X } from "@/components/app/icons";
-import { Button, Dialog, Menu, cx, useToast } from "@/components/app/ui";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Button, ContextMenu, Dialog, Menu, cx, useToast, type MenuItem } from "@/components/app/ui";
+import { HomeSidebar, NAV, type HomeView } from "@/components/home/Sidebar";
+import {
+  ApparelGlyph,
+  BellIcon,
+  CrochetGlyph,
+  GridGlyph,
+  KnittingGlyph,
+  MegaphoneIcon,
+  MenuIcon,
+  MoreIcon,
+  PaperGlyph,
+  PinIcon,
+  PlusIcon,
+  SearchIcon,
+  SortIcon,
+  XIcon,
+} from "@/components/home/icons";
 import { Wordmark } from "@/components/Wordmark";
 import { useWorkList, works } from "@/lib/store";
 import { CRAFT_LABEL, type Craft, type Work } from "@/lib/types";
+import "@/components/home/home.css";
 
 type Entry = Omit<Work, "data">;
-type View = "all" | Craft | "trash";
+type Sort = "updated" | "created";
 
-const NAV: { id: View; label: string }[] = [
-  { id: "all", label: "모든 파일" },
-  { id: "crochet", label: "코바늘 도안" },
-  { id: "knitting", label: "대바늘 도안" },
-  { id: "grid", label: "배색·방안 도안" },
-];
+const SOON = "준비 중이에요";
+const NOTICE_ID = "26.10.21";
+const NOTICE_KEY = "patterners.home.noticeDismissed";
 
-const EMPTY: Record<View, string> = {
+const EMPTY: Record<HomeView, string> = {
   all: "아직 파일이 없어요.",
   crochet: "아직 코바늘 도안이 없어요.",
   knitting: "아직 대바늘 도안이 없어요.",
   grid: "아직 배색·방안 도안이 없어요.",
+  apparel: "아직 의류 도안이 없어요.",
+  papers: "아직 페이퍼가 없어요.",
   trash: "휴지통이 비어 있어요.",
 };
 
-const CRAFTS: { craft: Craft; title: string; desc: string }[] = [
-  { craft: "crochet", title: "코바늘", desc: "기호 도안을 화이트보드에서 그려요." },
-  { craft: "knitting", title: "대바늘", desc: "격자에 기호를 채워 차트를 만들어요." },
-  { craft: "grid", title: "배색·방안", desc: "글자·이미지를 배색 도안으로 바꿔요." },
+const NEW_TITLE: Record<Craft, string> = {
+  crochet: "새 코바늘 도안",
+  knitting: "새 대바늘 도안",
+  grid: "새 배색·방안 도안",
+};
+
+type Kind = Craft | "apparel" | "paper";
+/** Create buttons, in reference order, with their square badge colours. */
+const CREATE: { kind: Kind; label: string; color: string; Glyph: (p: { className?: string }) => ReactNode }[] = [
+  { kind: "crochet", label: "코바늘", color: "var(--seed-color-bg-brand-solid)", Glyph: CrochetGlyph },
+  { kind: "knitting", label: "대바늘", color: "var(--seed-color-palette-blue-600)", Glyph: KnittingGlyph },
+  { kind: "grid", label: "배색·방안", color: "var(--seed-color-palette-carrot-600)", Glyph: GridGlyph },
+  { kind: "apparel", label: "의류 (beta)", color: "var(--seed-color-palette-purple-600)", Glyph: ApparelGlyph },
+  { kind: "paper", label: "페이퍼", color: "var(--seed-color-palette-yellow-700)", Glyph: PaperGlyph },
 ];
+const CRAFT_BADGE = Object.fromEntries(CREATE.map((c) => [c.kind, c])) as Record<Kind, (typeof CREATE)[number]>;
+
+const SORT_LABEL: Record<Sort, string> = { updated: "최근 편집순", created: "생성일 순" };
 
 // Korean initial-consonant search (e.g. ㅋㅂㄴ → 코바늘)
 const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
 const initials = (s: string) =>
-  [...s].map((ch) => {
-    const c = ch.charCodeAt(0) - 0xac00;
-    return c >= 0 && c < 11172 ? CHO[Math.floor(c / 588)] : ch;
-  }).join("");
+  [...s]
+    .map((ch) => {
+      const c = ch.charCodeAt(0) - 0xac00;
+      return c >= 0 && c < 11172 ? CHO[Math.floor(c / 588)] : ch;
+    })
+    .join("");
 const matches = (title: string, q: string) => {
   const t = title.toLowerCase();
   const query = q.toLowerCase().trim();
@@ -55,16 +85,51 @@ function timeAgo(ts: number) {
   return new Date(ts).toLocaleDateString("ko-KR");
 }
 
+/** "새 코바늘 도안 1", "… 2", … — next free number for that craft. */
+function nextTitle(list: Entry[], craft: Craft) {
+  const base = NEW_TITLE[craft];
+  const re = new RegExp(`^${base} (\\d+)$`);
+  const n = list.reduce((m, w) => Math.max(m, Number(re.exec(w.title)?.[1] ?? 0)), 0);
+  return `${base} ${n + 1}`;
+}
+
+const isView = (v: string | null): v is HomeView => !!v && NAV.some((n) => n.id === v && n.ready);
+
 export default function HomePage() {
   const list = useWorkList();
   const router = useRouter();
   const toast = useToast();
-  const [view, setView] = useState<View>("all");
+  const [view, setViewState] = useState<HomeView>("all");
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<"updated" | "created">("updated");
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [sort, setSort] = useState<Sort>("updated");
   const [renaming, setRenaming] = useState<Entry | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [notice, setNotice] = useState(true);
+  const soon = () => toast(SOON);
+
+  // Restore ?tab= and the dismissed notice after mount (static page, no SSR data).
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    let dismissed = false;
+    try {
+      dismissed = localStorage.getItem(NOTICE_KEY) === NOTICE_ID;
+    } catch {}
+    if (isView(tab)) setViewState(tab);
+    if (dismissed) setNotice(false);
+  }, []);
+
+  const setView = (v: HomeView) => {
+    setViewState(v);
+    setNavOpen(false);
+    window.history.replaceState(null, "", v === "all" ? "/home" : `/home?tab=${v}`);
+  };
+
+  const dismissNotice = () => {
+    setNotice(false);
+    try {
+      localStorage.setItem(NOTICE_KEY, NOTICE_ID);
+    } catch {}
+  };
 
   const visible = useMemo(() => {
     const live = list.filter((w) => (view === "trash" ? !!w.deletedAt : !w.deletedAt));
@@ -75,197 +140,186 @@ export default function HomePage() {
   }, [list, view, query, sort]);
   const pinned = view === "trash" ? [] : visible.filter((w) => w.pinned);
   const rest = view === "trash" ? visible : visible.filter((w) => !w.pinned);
+  const hasLive = list.some((w) => !w.deletedAt);
 
-  const create = (craft: Craft) => {
-    const w = works.create(craft);
+  const create = (kind: Kind) => {
+    if (kind === "apparel" || kind === "paper") return soon();
+    const w = works.create(kind, nextTitle(list, kind));
     router.push(`/maker/${w.id}`);
   };
 
-  const count = (v: View) =>
-    list.filter((w) => (v === "trash" ? w.deletedAt : !w.deletedAt && (v === "all" || w.craft === v))).length;
-
-  const nav = (
-    <nav className="flex flex-col gap-x0_5">
-      {NAV.map((n) => (
-        <NavItem key={n.id} active={view === n.id} onClick={() => (setView(n.id), setNavOpen(false))} count={count(n.id)} icon={n.id === "all" ? <Files /> : <Folder />}>
-          {n.label}
-        </NavItem>
-      ))}
-      <div className="my-x2 border-t border-stroke-neutral-muted" />
-      <NavItem active={view === "trash"} onClick={() => (setView("trash"), setNavOpen(false))} count={count("trash")} icon={<Trash />}>
-        휴지통
-      </NavItem>
-    </nav>
-  );
+  const title = NAV.find((n) => n.id === view)?.label ?? "모든 파일";
+  const trash = view === "trash";
 
   return (
-    <div className="landing flex min-h-dvh bg-bg-layer-default text-fg-neutral">
-      {/* sidebar */}
-      <aside className="sticky top-0 hidden h-dvh w-[248px] shrink-0 flex-col border-r border-stroke-neutral-muted bg-bg-layer-fill px-x3 py-x4 md:flex">
-        <Link href="/" className="mb-x6 flex px-x2" aria-label="PATTERNERS">
-          <Wordmark className="h-6" />
-        </Link>
-        <Button variant="primary" className="mb-x5 w-full" onClick={() => setPickerOpen(true)}>
-          <Plus className="size-4" />새 도안
-        </Button>
-        {nav}
-        <p className="mt-auto px-x2 text-[0.75rem] leading-[1.5] text-fg-neutral-subtle">
-          도안은 이 브라우저에 저장돼요.
-        </p>
+    <div className="flex min-h-dvh bg-bg-layer-default" data-own-chrome="true" data-works-home="">
+      <aside className="sticky top-0 hidden h-dvh shrink-0 flex-col lg:flex">
+        <HomeSidebar className="min-h-dvh" view={view} onView={setView} onSoon={soon} />
       </aside>
 
-      <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-10 flex h-16 items-center gap-x3 border-b border-stroke-neutral-muted bg-bg-layer-default/90 px-x4 backdrop-blur md:px-x8">
-          <button type="button" aria-label="메뉴" className="inline-flex size-9 items-center justify-center rounded-r2 hover:bg-bg-layer-fill md:hidden" onClick={() => setNavOpen((v) => !v)}>
-            {navOpen ? <X /> : <MenuIcon />}
+      {navOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setNavOpen(false)} />
+          <div className="relative h-dvh bg-bg-layer-default shadow-s3">
+            <HomeSidebar className="h-dvh" view={view} onView={setView} onSoon={soon} />
+          </div>
+        </div>
+      )}
+
+      <div className="min-w-0 flex-1 overflow-y-auto px-x5 py-x8 sm:px-x8 sm:py-x10">
+        {/* mobile top bar (the sidebar is hidden below lg) */}
+        <div className="-mt-x3 mb-x4 flex items-center gap-x2 lg:hidden">
+          <button
+            type="button"
+            aria-label="메뉴"
+            onClick={() => setNavOpen(true)}
+            className="seed-action-button seed-action-button--variant_ghost seed-action-button--size_small seed-action-button--layout_iconOnly seed-action-button--size_small-layout_iconOnly rounded-full"
+          >
+            <MenuIcon className="seed-icon" />
           </button>
-          <h1 className="t7-bold">{view === "trash" ? "휴지통" : NAV.find((n) => n.id === view)?.label ?? "내 도안"}</h1>
-          <label className="ml-auto flex h-9 w-full max-w-[280px] items-center gap-x2 rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x3 focus-within:border-stroke-neutral-contrast">
-            <Search className="size-4 shrink-0 text-fg-neutral-subtle" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="제목으로 검색"
-              aria-label="제목으로 검색"
-              className="min-w-0 flex-1 bg-transparent text-[0.875rem] outline-none placeholder:text-fg-placeholder"
-            />
-            {query && (
-              <button type="button" aria-label="검색어 지우기" onClick={() => setQuery("")} className="text-fg-neutral-subtle">
-                <X className="size-4" />
+          <Wordmark className="h-6 text-fg-neutral" />
+        </div>
+
+        {notice && (
+          <div className="seed-callout__root seed-callout__root--tone_informative mb-x4">
+            <MegaphoneIcon className="seed-prefix-icon" />
+            <div className="seed-callout__content seed-callout__content--tone_informative flex min-w-0 flex-1 items-baseline gap-x1_5">
+              <span className="seed-callout__title seed-callout__title--tone_informative shrink-0 whitespace-nowrap">새 공지</span>
+              <span className="seed-callout__description seed-callout__description--tone_informative min-w-0 truncate">[update] 기능 업데이트 안내 (26.10.21)</span>
+              <button type="button" className="seed-callout__link seed-callout__link--tone_informative shrink-0" onClick={soon}>
+                보기
               </button>
-            )}
-          </label>
-          <Button variant="primary" size="sm" className="md:hidden" onClick={() => setPickerOpen(true)} aria-label="새 도안">
-            <Plus className="size-4" />
-          </Button>
-        </header>
+            </div>
+            <button type="button" aria-label="공지 배너 닫기" className="seed-callout__closeButton seed-callout__closeButton--tone_informative" onClick={dismissNotice}>
+              <XIcon className="seed-suffix-icon" />
+            </button>
+          </div>
+        )}
 
-        {navOpen && <div className="border-b border-stroke-neutral-muted bg-bg-layer-fill p-x3 md:hidden">{nav}</div>}
-
-        <div className="px-x4 py-x6 md:px-x8">
-          <div className="mb-x4 flex items-center gap-x2 text-[0.8125rem] text-fg-neutral-muted">
-            {view === "trash" ? (
-              <>
-                <span>삭제한 작업은 30일 동안 여기에 보관된 뒤 자동으로 지워져요.</span>
-                {visible.length > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="ml-auto text-fg-critical"
-                    onClick={() => {
-                      if (confirm("휴지통의 모든 항목을 영구적으로 삭제할까요? 이 작업은 되돌릴 수 없어요.")) {
-                        visible.forEach((w) => works.destroy(w.id));
-                        toast("휴지통을 비웠어요");
-                      }
-                    }}
-                  >
-                    휴지통 비우기
-                  </Button>
-                )}
-              </>
+        <div className="flex flex-wrap items-center justify-between gap-x3 border-b border-stroke-neutral-muted pb-x4">
+          <h1 className="t6-bold text-fg-neutral sm:t7-bold">{title}</h1>
+          <div className="flex flex-wrap items-center justify-end gap-x2">
+            <label className="relative block w-full sm:w-56" data-works-search="">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-fg-neutral-subtle" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="제목으로 검색"
+                aria-label="제목으로 검색"
+                className="h-x9 w-full rounded-full border border-stroke-neutral-muted bg-bg-layer-default pr-x8 pl-x8 t3-regular text-fg-neutral outline-none placeholder:text-fg-neutral-subtle focus:border-stroke-neutral-contrast [&::-webkit-search-cancel-button]:hidden"
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="검색어 지우기"
+                  onClick={() => setQuery("")}
+                  className="absolute top-1/2 right-2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-fg-neutral-subtle hover:bg-bg-layer-fill"
+                >
+                  <XIcon className="size-3.5" />
+                </button>
+              )}
+            </label>
+            <span className="hidden lg:contents">
+              <button
+                type="button"
+                aria-label="알림"
+                onClick={soon}
+                className="seed-action-button seed-action-button--variant_ghost seed-action-button--size_small seed-action-button--layout_iconOnly seed-action-button--size_small-layout_iconOnly seed-scale-feedback relative rounded-full"
+              >
+                <BellIcon className="seed-icon" />
+              </button>
+            </span>
+            {trash ? (
+              visible.length > 0 && (
+                <button
+                  type="button"
+                  className="seed-action-button seed-action-button--variant_neutralOutline seed-action-button--size_small seed-action-button--layout_withText seed-action-button--size_small-layout_withText seed-scale-feedback rounded-full text-fg-critical"
+                  onClick={() => {
+                    if (confirm("휴지통의 모든 항목을 영구적으로 삭제할까요? 이 작업은 되돌릴 수 없어요.")) {
+                      visible.forEach((w) => works.destroy(w.id));
+                      toast("휴지통을 비웠어요");
+                    }
+                  }}
+                >
+                  휴지통 비우기
+                </button>
+              )
             ) : (
               <>
-                <span>{visible.length}개</span>
-                <select
-                  aria-label="정렬"
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value as "updated" | "created")}
-                  className="ml-auto h-8 rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x2 text-[0.8125rem] text-fg-neutral"
-                >
-                  <option value="updated">최근 편집순</option>
-                  <option value="created">생성일 순</option>
-                </select>
+                <div data-tour="home-new-work">
+                  <div className="flex flex-wrap items-center gap-x2">
+                    {CREATE.map(({ kind, label, color, Glyph }) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        onClick={() => create(kind)}
+                        className={cx(
+                          "seed-action-button seed-action-button--variant_neutralOutline seed-action-button--size_small seed-action-button--layout_withText seed-action-button--size_small-layout_withText seed-scale-feedback rounded-full pr-x2",
+                          !hasLive && "work-create-pulse",
+                        )}
+                      >
+                        <PlusIcon className="seed-prefix-icon" />
+                        {label}
+                        <span className="ml-x0_5 flex size-x5 items-center justify-center rounded-r1 text-palette-static-white" aria-hidden="true" style={{ backgroundColor: color }}>
+                          <Glyph className="size-x3" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Menu
+                  align="end"
+                  trigger={({ toggle }) => (
+                    <button
+                      type="button"
+                      aria-label={SORT_LABEL[sort]}
+                      aria-haspopup="menu"
+                      onClick={toggle}
+                      className="seed-action-button seed-action-button--variant_neutralOutline seed-action-button--size_small seed-action-button--layout_withText seed-action-button--size_small-layout_withText seed-scale-feedback rounded-full"
+                    >
+                      <SortIcon className="seed-prefix-icon" />
+                      <span className="hidden min-[1440px]:inline">{SORT_LABEL[sort]}</span>
+                    </button>
+                  )}
+                  items={(Object.keys(SORT_LABEL) as Sort[]).map((s) => ({
+                    label: (s === sort ? "✓ " : "") + SORT_LABEL[s],
+                    onSelect: () => setSort(s),
+                  }))}
+                />
               </>
             )}
           </div>
+        </div>
 
-          {visible.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-[20px] border border-dashed border-stroke-neutral-weak px-x6 py-x16 text-center">
-              <p className="t5-bold">{query ? `‘${query}’에 맞는 파일이 없어요` : EMPTY[view]}</p>
-              <p className="mt-x2 text-[0.875rem] text-fg-neutral-muted">
-                {query ? "다른 낱말이나 초성(예: ㅋㅂㄴ)으로 찾아보세요." : view === "trash" ? "" : "새 도안을 눌러 시작해 보세요."}
+        {trash && <p className="mt-x4 t3-regular text-fg-neutral-muted">삭제한 작업은 30일 동안 여기에 보관된 뒤 자동으로 지워져요.</p>}
+
+        {visible.length === 0 ? (
+          <div data-tour="home-work-card" className="flex min-h-[50dvh] flex-col items-center justify-center gap-x2 px-x4 text-center">
+            <p className="t7-bold text-fg-neutral">{query ? `‘${query}’에 맞는 파일이 없어요` : EMPTY[view]}</p>
+            {(query || !trash) && (
+              <p className="t4-regular text-fg-neutral-muted">
+                {query ? "다른 낱말이나 초성(예: ㅋㅂㄴ)으로 찾아보세요." : "오른쪽 위에서 깜빡이는 + 버튼을 눌러 시작해 보세요."}
               </p>
-              {!query && view !== "trash" && (
-                <Button variant="primary" className="mt-x5" onClick={() => (view === "all" ? setPickerOpen(true) : create(view))}>
-                  <Plus className="size-4" />새 도안
-                </Button>
-              )}
-            </div>
-          ) : (
-            <>
-              {pinned.length > 0 && (
-                <>
-                  <h2 className="mb-x3 text-[0.8125rem] font-semibold text-fg-neutral-muted">고정됨</h2>
-                  <CardGrid items={pinned} onRename={setRenaming} />
-                  <div className="h-x8" />
-                </>
-              )}
-              <CardGrid items={rest} trash={view === "trash"} onRename={setRenaming} />
-            </>
-          )}
-        </div>
-      </main>
-
-      <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} title="어떤 도안을 만들까요?" width={560}>
-        <p className="-mt-x2 mb-x4 text-[0.875rem] text-fg-neutral-muted">만들고 싶은 종류를 선택해 주세요.</p>
-        <div className="grid gap-x3 sm:grid-cols-3">
-          {CRAFTS.map((c) => (
-            <button
-              key={c.craft}
-              type="button"
-              onClick={() => create(c.craft)}
-              className="flex flex-col items-start gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-fill p-x4 text-left transition-colors hover:border-stroke-neutral-contrast"
-            >
-              <CraftGlyph craft={c.craft} />
-              <span className="t5-bold">{c.title}</span>
-              <span className="text-[0.8125rem] leading-[1.45] text-fg-neutral-muted">{c.desc}</span>
-            </button>
-          ))}
-        </div>
-      </Dialog>
+            )}
+          </div>
+        ) : (
+          <div className="pt-x6">
+            {pinned.length > 0 && (
+              <>
+                <h2 className="mb-x3 t3-bold text-fg-neutral-muted">고정된 도안</h2>
+                <CardGrid items={pinned} onRename={setRenaming} />
+                <div className="h-x8" />
+              </>
+            )}
+            <CardGrid items={rest} trash={trash} onRename={setRenaming} />
+          </div>
+        )}
+      </div>
 
       <RenameDialog entry={renaming} onClose={() => setRenaming(null)} />
     </div>
   );
-}
-
-function NavItem({ active, onClick, count, icon, children }: { active: boolean; onClick: () => void; count: number; icon: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active ? "page" : undefined}
-      className={cx(
-        "flex h-10 items-center gap-x2_5 rounded-r2 px-x3 text-[0.875rem] font-medium transition-colors [&_svg]:size-4",
-        active ? "bg-bg-layer-default text-fg-neutral shadow-s1" : "text-fg-neutral-muted hover:bg-bg-layer-default/60 hover:text-fg-neutral",
-      )}
-    >
-      {icon}
-      {children}
-      <span className="ml-auto text-[0.75rem] text-fg-neutral-subtle tabular-nums">{count || ""}</span>
-    </button>
-  );
-}
-
-function CraftGlyph({ craft }: { craft: Craft }) {
-  const common = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className: "size-7 text-fg-brand", "aria-hidden": true };
-  if (craft === "crochet")
-    return (
-      <svg {...common}>
-        <path d="M6.8 20.6c-1.1.3-2-.7-1.5-1.7L14.2 5.8c.5-1 1.9-1.4 2.9-.7.8.5 1 1.6.4 2.3-.6.8-1.8.9-2.5.2l-.9-.8" />
-        <path d="M9.2 16.2h2.4" />
-      </svg>
-    );
-  if (craft === "knitting")
-    return (
-      <svg {...common}>
-        <path d="M5.2 18.8 16.6 6.6" />
-        <circle cx="18" cy="5.1" r="1.55" />
-        <path d="M18.8 18.8 7.4 6.6" />
-        <circle cx="6" cy="5.1" r="1.55" />
-      </svg>
-    );
-  return <Grid className="size-7 text-fg-brand" />;
 }
 
 function CardGrid({ items, trash, onRename }: { items: Entry[]; trash?: boolean; onRename: (e: Entry) => void }) {
@@ -281,69 +335,90 @@ function CardGrid({ items, trash, onRename }: { items: Entry[]; trash?: boolean;
 function WorkCard({ w, trash, onRename }: { w: Entry; trash?: boolean; onRename: (e: Entry) => void }) {
   const toast = useToast();
   const router = useRouter();
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   const open = () => !trash && router.push(`/maker/${w.id}`);
   const daysLeft = w.deletedAt ? Math.max(0, 30 - Math.floor((Date.now() - w.deletedAt) / 864e5)) : 0;
+  const badge = CRAFT_BADGE[w.craft];
+
+  const items: MenuItem[] = trash
+    ? [
+        { label: "복원", onSelect: () => (works.restore(w.id), toast("복원했어요.")) },
+        {
+          label: "영구 삭제",
+          danger: true,
+          onSelect: () => {
+            if (confirm("이 작업은 되돌릴 수 없어요. 영구적으로 삭제할까요?")) {
+              works.destroy(w.id);
+              toast("영구 삭제했어요");
+            }
+          },
+        },
+      ]
+    : [
+        { label: "열기", onSelect: open },
+        { label: "이름 변경", onSelect: () => onRename(w) },
+        { label: "복제", onSelect: () => (works.duplicate(w.id), toast("복제했어요")) },
+        { label: w.pinned ? "고정 해제" : "고정", onSelect: () => works.update(w.id, { pinned: !w.pinned }) },
+        "separator",
+        {
+          label: "삭제",
+          danger: true,
+          onSelect: () => {
+            works.trash(w.id);
+            toast("휴지통으로 옮겼어요", { label: "실행 취소", run: () => works.restore(w.id) });
+          },
+        },
+      ];
 
   return (
-    <li className="group relative">
-      <button type="button" onClick={open} disabled={trash} className="block w-full text-left">
-        <div className="lp-panel flex aspect-[4/3] items-center justify-center overflow-hidden transition-colors group-hover:border-stroke-neutral-weak">
+    <li
+      className="group relative"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setAt({ x: e.clientX, y: e.clientY });
+      }}
+    >
+      <button type="button" onClick={open} disabled={trash} aria-label={w.title} className="block w-full text-left">
+        <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-r3 border border-stroke-neutral-muted bg-bg-layer-fill transition-colors group-hover:border-stroke-neutral-weak">
           {w.thumbnail ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={w.thumbnail} alt="" className="h-full w-full object-contain p-x3" />
           ) : (
-            <span className="text-[0.8125rem] text-fg-neutral-subtle">빈 도안</span>
+            <span className="flex size-x10 items-center justify-center rounded-r2 text-palette-static-white opacity-80" style={{ backgroundColor: badge.color }} aria-hidden="true">
+              <badge.Glyph className="size-x5" />
+            </span>
           )}
         </div>
-        <p className="mt-x2_5 flex items-center gap-x1_5 truncate pr-x8 text-[0.9375rem] font-semibold">
-          {w.pinned && <Pin className="size-3.5 shrink-0 text-fg-brand" />}
-          <span className="truncate">{w.title}</span>
-        </p>
-        <p className="lp-caption">
-          {CRAFT_LABEL[w.craft]} · {trash ? (daysLeft ? `${daysLeft}일 후 삭제` : "오늘 삭제") : `수정됨 ${timeAgo(w.updatedAt)}`}
-        </p>
       </button>
-      <div className="absolute right-0 bottom-1">
+      <div className="mt-x2_5 flex items-start gap-x1">
+        <button type="button" onClick={open} disabled={trash} tabIndex={-1} className="min-w-0 flex-1 text-left">
+          <span className="flex items-center gap-x1_5">
+            <span className="flex size-x4 shrink-0 items-center justify-center rounded-r1 text-palette-static-white" style={{ backgroundColor: badge.color }} aria-hidden="true">
+              <badge.Glyph className="size-x2_5" />
+            </span>
+            <span className="truncate t4-bold text-fg-neutral">{w.title}</span>
+            {w.pinned && <PinIcon className="size-3.5 shrink-0 text-fg-brand" />}
+          </span>
+          <span className="mt-x0_5 block t2-regular text-fg-neutral-subtle">
+            {CRAFT_LABEL[w.craft]} · {trash ? (daysLeft ? `${daysLeft}일 후 삭제` : "오늘 삭제") : `수정됨 ${timeAgo(w.updatedAt)}`}
+          </span>
+        </button>
         <Menu
           align="end"
           trigger={({ toggle }) => (
-            <button type="button" aria-label={`${w.title} 메뉴`} onClick={toggle} className="inline-flex size-8 items-center justify-center rounded-r2 text-fg-neutral-muted hover:bg-bg-layer-fill">
-              <More />
+            <button
+              type="button"
+              aria-label={`${w.title} 메뉴`}
+              onClick={toggle}
+              className="-mt-x1 inline-flex size-8 shrink-0 items-center justify-center rounded-full text-fg-neutral-muted hover:bg-bg-layer-fill"
+            >
+              <MoreIcon className="size-[18px]" />
             </button>
           )}
-          items={
-            trash
-              ? [
-                  { label: "복원", onSelect: () => (works.restore(w.id), toast("복원했어요.")) },
-                  {
-                    label: "영구 삭제",
-                    danger: true,
-                    onSelect: () => {
-                      if (confirm("이 작업은 되돌릴 수 없어요. 영구적으로 삭제할까요?")) {
-                        works.destroy(w.id);
-                        toast("영구 삭제했어요");
-                      }
-                    },
-                  },
-                ]
-              : [
-                  { label: "열기", onSelect: open },
-                  { label: "이름 변경", onSelect: () => onRename(w) },
-                  { label: "복제", onSelect: () => (works.duplicate(w.id), toast("복제했어요")) },
-                  { label: w.pinned ? "고정 해제" : "고정", onSelect: () => works.update(w.id, { pinned: !w.pinned }) },
-                  "separator",
-                  {
-                    label: "삭제",
-                    danger: true,
-                    onSelect: () => {
-                      works.trash(w.id);
-                      toast("휴지통으로 옮겼어요", { label: "실행 취소", run: () => works.restore(w.id) });
-                    },
-                  },
-                ]
-          }
+          items={items}
         />
       </div>
+      <ContextMenu at={at} items={items} onClose={() => setAt(null)} />
     </li>
   );
 }
