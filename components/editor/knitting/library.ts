@@ -1,5 +1,6 @@
 // Stitch-pattern library (무늬 라이브러리). Rows are listed top → bottom as on the chart.
-// Tokens are symbol ids; "-" is a cell covered by the wide symbol to its left.
+// Tokens are symbol ids (short legacy ids map to the catalogue); "-" is a cell covered by the wide symbol to its left.
+import { canonicalSymbol } from "@/lib/symbols/knitting";
 import type { KnitCell } from "@/lib/types";
 import type { Block } from "./model";
 
@@ -20,7 +21,7 @@ const P = (id: string, name: string, cat: LibCat, rows: string[]): LibPattern =>
   const cells: KnitCell[] = [];
   for (const row of grid) {
     if (row.length !== cols) throw new Error(`pattern ${id}: ragged row`);
-    for (const t of row) cells.push(t === "-" ? null : { symbol: t });
+    for (const t of row) cells.push(t === "-" ? null : { symbol: canonicalSymbol(t) });
   }
   return { id, name, cat, block: { cols, rows: grid.length, cells } };
 };

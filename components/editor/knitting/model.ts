@@ -3,19 +3,38 @@ import { uid } from "@/lib/id";
 import { knitSymbol } from "@/lib/symbols/knitting";
 import type { KnitCell, KnitData, KnitGrid } from "@/lib/types";
 
-/** world width of one stitch; row height follows the gauge */
-export const CW = 24;
+/** chart cell: 28px tall; stitches are 37px wide unless the gauge sets the aspect */
+export const CELL_H = 28;
+export const CELL_W = 37;
 export const BIG_GRID = 20000;
 
-export type Numbering = { side: "left" | "right"; alternate: boolean; interval: number };
-export const DEFAULT_NUMBERING: Numbering = { side: "right", alternate: false, interval: 1 };
+/**
+ * Row/stitch numbers. Each side holds its label interval (0 = hidden); 1 is always labelled.
+ * reverseRows: row 1 is the bottom row; reverseCols: stitch 1 is the right-most column.
+ */
+export type Numbering = { left: number; top: number; right: number; bottom: number; offset: number; reverseRows: boolean; reverseCols: boolean };
+export const DEFAULT_NUMBERING: Numbering = { left: 0, top: 0, right: 5, bottom: 5, offset: 0, reverseRows: true, reverseCols: true };
+type LegacyNumbering = { side?: "left" | "right"; alternate?: boolean; interval?: number };
+export function numberingOf(n: unknown): Numbering {
+  if (!n || typeof n !== "object") return DEFAULT_NUMBERING;
+  const o = n as Partial<Numbering> & LegacyNumbering;
+  if (typeof o.right === "number" || typeof o.left === "number") return { ...DEFAULT_NUMBERING, ...o };
+  // documents saved with { side, alternate, interval }
+  const iv = Math.max(1, o.interval ?? 1);
+  return { ...DEFAULT_NUMBERING, left: o.alternate || o.side === "left" ? iv : 0, right: o.alternate || o.side !== "left" ? iv : 0, bottom: iv };
+}
+
+export type RowSides = { worked: "flat" | "round"; firstRowSide: "RS" | "WS" };
+export const DEFAULT_ROW_SIDES: RowSides = { worked: "flat", firstRowSide: "RS" };
 
 // Optional fields this editor stores alongside the shared types.
-export type KGrid = KnitGrid & { numbering?: Numbering };
-export type KDoc = Omit<KnitData, "grids"> & { grids: KGrid[] };
+export type KGrid = KnitGrid & { numbering?: Numbering; sides?: RowSides };
+export type KDoc = Omit<KnitData, "grids"> & { grids: KGrid[]; gaugeOn?: boolean; bg?: { color: string; opacity: number } };
 
 export type Geo = { cw: number; ch: number };
-export const geoOf = (gauge: KnitData["gauge"]): Geo => ({ cw: CW, ch: (CW * gauge.sts) / gauge.rows });
+/** gauge off: fixed 37 × 28 cells; gauge on: the cell aspect follows stitches/rows per 10cm */
+export const geoOf = (d: { gauge: KnitData["gauge"]; gaugeOn?: boolean }): Geo =>
+  d.gaugeOn ? { cw: Math.round(((CELL_H * d.gauge.rows) / d.gauge.sts) * 100) / 100, ch: CELL_H } : { cw: CELL_W, ch: CELL_H };
 
 export type Rect = { c0: number; r0: number; c1: number; r1: number };
 export type Sel = Rect & { gridId: string };

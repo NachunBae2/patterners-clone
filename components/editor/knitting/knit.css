@@ -1,0 +1,58 @@
+/* Rules from the reference editor that our shared stylesheet does not ship. */
+
+.panel-tile-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-min, 64px), 100%), 1fr));
+  display: grid;
+}
+
+.maker-bottom-tools .seed-action-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px !important;
+}
+.maker-bottom-tools .seed-action-button:disabled {
+  color: var(--seed-color-fg-neutral-subtle);
+}
+@media (pointer: coarse) {
+  .maker-bottom-tools button {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+  }
+}
+
+@keyframes knit-spotlight-pulse {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+.knit-spotlight-pulse {
+  animation: 1.7s ease-out infinite knit-spotlight-pulse;
+}
+@media (prefers-reduced-motion: reduce) {
+  .knit-spotlight-pulse {
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
+/* shadcn-style tokens the lesson cards use (primary = brand solid) */
+.knit-editor {
+  --primary: var(--seed-color-bg-brand-solid);
+}
+.knit-ring-primary-70 {
+  --tw-ring-color: color-mix(in oklab, var(--primary) 70%, transparent);
+}
+.knit-ring-primary-50 {
+  --tw-ring-color: color-mix(in oklab, var(--primary) 50%, transparent);
+}
+.knit-bg-primary-15 {
+  background-color: color-mix(in oklab, var(--primary) 15%, transparent);
+}
+.knit-text-primary {
+  color: var(--primary);
+}
