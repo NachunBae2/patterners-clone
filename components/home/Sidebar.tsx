@@ -53,11 +53,14 @@ export function HomeSidebar({
   view,
   onView,
   onSoon,
+  onTour,
   className,
 }: {
   view: HomeView;
   onView: (v: HomeView) => void;
   onSoon: () => void;
+  /** "사용방법 보기" reopens the home tour */
+  onTour?: () => void;
   className?: string;
 }) {
   return (
@@ -91,6 +94,7 @@ export function HomeSidebar({
                 key={n.id}
                 href={`/home?tab=${n.id}`}
                 className="seed-side-navigation-menu-item__root"
+                data-tour={n.id === "trash" ? "home-trash" : undefined}
                 data-side-navigation-state="expanded"
                 data-current={current ? "" : undefined}
                 aria-current={current ? "page" : undefined}
@@ -117,7 +121,7 @@ export function HomeSidebar({
             className="seed-side-navigation-menu-item__root"
             data-side-navigation-state="expanded"
             aria-label={f.dot ? `${f.label} · 새 공지` : undefined}
-            onClick={onSoon}
+            onClick={f.label === "사용방법 보기" && onTour ? onTour : onSoon}
           >
             {f.dot ? (
               <span aria-hidden="true" data-side-navigation-state="expanded" className={`[&>svg]:size-full ${PREFIX}`}>

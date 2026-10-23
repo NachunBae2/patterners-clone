@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useState } from "react";
-import { cx } from "@/components/app/ui";
+import { memo, useRef, useState } from "react";
+import { MenuList, cx, useOutside } from "@/components/app/ui";
 import { SymbolIcon } from "@/lib/symbols/crochet";
 import { BTN, BTN_TOOL, el, sab } from "./seed";
 import { ArrowRightLeft, BookmarkPlus, ChevronDown, CircleQuestionMark, Group, Hand, Hash, MousePointer2, PenTool, Pencil, Plus, Redo2, Undo2, Ungroup, X } from "./uiIcons";
@@ -141,7 +141,34 @@ type ToolbarProps = {
   canRegister: boolean;
   onRegister: () => void;
   onHelp: () => void;
+  /** 기능 체험하기: reopens the first-run tour */
+  onTour: () => void;
 };
+
+/** "?" button: a small menu above it (기능 체험하기 · 단축키 보기). */
+function HelpMenu({ onTour, onHelp }: { onTour: () => void; onHelp: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutside(ref, open, () => setOpen(false));
+  return (
+    <div ref={ref} className="relative" data-tour="help">
+      <ToolButton label="단축키 도움말" onClick={() => setOpen((v) => !v)}>
+        <CircleQuestionMark />
+      </ToolButton>
+      {open && (
+        <div className="absolute right-0 bottom-[calc(100%+8px)] z-50">
+          <MenuList
+            items={[
+              { label: "기능 체험하기", onSelect: onTour },
+              { label: "단축키 보기", shortcut: "?", onSelect: onHelp },
+            ]}
+            onClose={() => setOpen(false)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 const Sep = () => <div className="mx-x0_5 h-6 w-px shrink-0 bg-stroke-neutral-muted @max-[38rem]/maker-canvas:hidden" />;
 
@@ -211,11 +238,7 @@ export const Toolbar = memo(function Toolbar(p: ToolbarProps) {
         </ToolButton>
       </div>
       <Sep />
-      <div data-tour="help">
-        <ToolButton label="단축키 도움말" onClick={p.onHelp}>
-          <CircleQuestionMark />
-        </ToolButton>
-      </div>
+      <HelpMenu onTour={p.onTour} onHelp={p.onHelp} />
     </div>
   );
 });

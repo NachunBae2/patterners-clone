@@ -1,0 +1,47 @@
+/* First-run guided tours (home + editors): rules the shared stylesheet does not ship. */
+
+.tour-root {
+  --tour-primary: var(--seed-color-bg-brand-solid);
+}
+.tour-chip {
+  background-color: color-mix(in oklab, var(--tour-primary) 15%, transparent);
+}
+.tour-ring-70 {
+  --tw-ring-color: color-mix(in oklab, var(--tour-primary) 70%, transparent);
+}
+.tour-ring-50 {
+  --tw-ring-color: color-mix(in oklab, var(--tour-primary) 50%, transparent);
+}
+
+@keyframes tour-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+.tour-enter {
+  animation: tour-enter 0.2s ease;
+}
+
+@keyframes tour-spotlight-pulse {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+.tour-pulse {
+  animation: 1.7s ease-out infinite tour-spotlight-pulse;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-enter {
+    animation: none;
+  }
+  .tour-pulse {
+    opacity: 0.5;
+    animation: none;
+  }
+}

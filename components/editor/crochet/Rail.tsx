@@ -16,19 +16,6 @@ const TABS: { id: NavTab; label: string; icon: (p: { className?: string }) => Re
   { id: "ai", label: "AI 어시스턴트", icon: Sparkle },
 ];
 
-/** The "P" mark standing in for the logo image (32 × 32): bold slanted P with a top bar. */
-function LogoMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="1.2 0 32 32" className={className} aria-hidden="true">
-      <path
-        fillRule="evenodd"
-        fill="#2b2b2b"
-        d="M7.4 6H21.6C25.6 6 27.5 8.4 26.8 11.8C26.1 15.4 23.1 17.6 18.7 17.6H14.6L12.9 26H8.3L11.4 10.4H6.5ZM15.9 10.4L15.4 13.5H18.4C20.2 13.5 21.7 12.8 22 11.8C22.3 10.8 21.5 10.4 20 10.4Z"
-      />
-    </svg>
-  );
-}
-
 /** Far-left icon rail: logo → home, panel tabs, export at the bottom. */
 export const Rail = memo(function Rail({ tab, open, onTab, onExport }: { tab: NavTab; open: boolean; onTab: (t: NavTab) => void; onExport: () => void }) {
   return (
@@ -39,7 +26,9 @@ export const Rail = memo(function Rail({ tab, open, onTab, onExport }: { tab: Na
         title="내 도안으로"
         className="mb-x3 flex size-x9 items-center justify-center rounded-r2 text-fg-neutral hover:bg-bg-layer-default-pressed focus-visible:outline-2 focus-visible:outline-stroke-focus-ring"
       >
-        <LogoMark className="size-8 rounded-md" />
+        {/* an <img> like the reference, so the rail's first <svg> is the 기호 tab icon */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img alt="" className="size-8 rounded-md object-cover" src="/brand/logo.svg" />
       </Link>
       <div className="flex flex-col items-center gap-x1" data-tour="nav-tabs">
         {TABS.map((t) => {

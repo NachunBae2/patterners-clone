@@ -21,6 +21,7 @@ import {
   XIcon,
 } from "@/components/home/icons";
 import { Wordmark } from "@/components/Wordmark";
+import { SpotlightTour, tourSeen, type TourStep } from "@/components/tour/SpotlightTour";
 import { useWorkList, works } from "@/lib/store";
 import { CRAFT_LABEL, type Craft, type Work } from "@/lib/types";
 import "@/components/home/home.css";
@@ -58,6 +59,37 @@ const CREATE: { kind: Kind; label: string; color: string; Glyph: (p: { className
   { kind: "paper", label: "페이퍼", color: "var(--seed-color-palette-yellow-700)", Glyph: PaperGlyph },
 ];
 const CRAFT_BADGE = Object.fromEntries(CREATE.map((c) => [c.kind, c])) as Record<Kind, (typeof CREATE)[number]>;
+
+/** "내 작업 공간" first-visit tour (HomeTour strings; anchors as in the reference). */
+const HOME_TOUR: TourStep[] = [
+  {
+    id: "welcome",
+    anchor: null,
+    title: "내 작업 공간",
+    body: "저장한 도안과 페이퍼가 여기에 모여 있어요. 주요 사용 방법을 짧게 둘러볼게요. 언제든 건너뛸 수 있고, 사이드바에서 다시 볼 수 있어요.",
+  },
+  {
+    id: "create",
+    anchor: "home-new-work",
+    side: "bottom",
+    title: "새 도안 만들기",
+    body: `오른쪽 위에서 ${CREATE.map((c) => c.label).join(", ")}를 바로 만들 수 있어요.`,
+  },
+  {
+    id: "card",
+    anchor: "home-work-card",
+    side: "bottom",
+    title: "카드 메뉴",
+    body: "도안 카드를 마우스 오른쪽 버튼으로 클릭하면 이름 변경, 고정, 커버, 복제, 삭제를 할 수 있어요. 터치 기기에서는 카드를 길게 누르면 같은 메뉴가 열려요.",
+  },
+  {
+    id: "trash",
+    anchor: "home-trash",
+    side: "right",
+    title: "휴지통",
+    body: "삭제한 작업은 왼쪽 휴지통에 30일 동안 보관된 뒤 자동으로 지워져요. 그 안에서 복원하거나 영구 삭제할 수 있어요.",
+  },
+];
 
 const SORT_LABEL: Record<Sort, string> = { updated: "최근 편집순", created: "생성일 순" };
 
@@ -105,6 +137,7 @@ export default function HomePage() {
   const [renaming, setRenaming] = useState<Entry | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [notice, setNotice] = useState(true);
+  const [tour, setTour] = useState(false);
   const soon = () => toast(SOON);
 
   // Restore ?tab= and the dismissed notice after mount (static page, no SSR data).
@@ -116,7 +149,22 @@ export default function HomePage() {
     } catch {}
     if (isView(tab)) setViewState(tab);
     if (dismissed) setNotice(false);
+    // first visit: the "내 작업 공간" tour (after paint, like the reference)
+    const raf = requestAnimationFrame(() => {
+      if (!tourSeen.home()) setTour(true);
+    });
+    return () => cancelAnimationFrame(raf);
   }, []);
+
+  const openTour = () => {
+    setNavOpen(false);
+    if (view !== "all") setView("all");
+    setTour(true);
+  };
+  const closeTour = () => {
+    tourSeen.markHome();
+    setTour(false);
+  };
 
   const setView = (v: HomeView) => {
     setViewState(v);
@@ -154,14 +202,14 @@ export default function HomePage() {
   return (
     <div className="flex min-h-dvh bg-bg-layer-default" data-own-chrome="true" data-works-home="">
       <aside className="sticky top-0 hidden h-dvh shrink-0 flex-col lg:flex">
-        <HomeSidebar className="min-h-dvh" view={view} onView={setView} onSoon={soon} />
+        <HomeSidebar className="min-h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} />
       </aside>
 
       {navOpen && (
         <div className="fixed inset-0 z-50 flex lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setNavOpen(false)} />
           <div className="relative h-dvh bg-bg-layer-default shadow-s3">
-            <HomeSidebar className="h-dvh" view={view} onView={setView} onSoon={soon} />
+            <HomeSidebar className="h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} />
           </div>
         </div>
       )}
@@ -308,31 +356,32 @@ export default function HomePage() {
             {pinned.length > 0 && (
               <>
                 <h2 className="mb-x3 t3-bold text-fg-neutral-muted">고정된 도안</h2>
-                <CardGrid items={pinned} onRename={setRenaming} />
+                <CardGrid items={pinned} onRename={setRenaming} tourFirst />
                 <div className="h-x8" />
               </>
             )}
-            <CardGrid items={rest} trash={trash} onRename={setRenaming} />
+            <CardGrid items={rest} trash={trash} onRename={setRenaming} tourFirst={!pinned.length} />
           </div>
         )}
       </div>
 
       <RenameDialog entry={renaming} onClose={() => setRenaming(null)} />
+      <SpotlightTour open={tour} steps={HOME_TOUR} onClose={closeTour} />
     </div>
   );
 }
 
-function CardGrid({ items, trash, onRename }: { items: Entry[]; trash?: boolean; onRename: (e: Entry) => void }) {
+function CardGrid({ items, trash, onRename, tourFirst }: { items: Entry[]; trash?: boolean; onRename: (e: Entry) => void; tourFirst?: boolean }) {
   return (
     <ul className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-x5">
-      {items.map((w) => (
-        <WorkCard key={w.id} w={w} trash={trash} onRename={onRename} />
+      {items.map((w, i) => (
+        <WorkCard key={w.id} w={w} trash={trash} onRename={onRename} tour={tourFirst && i === 0} />
       ))}
     </ul>
   );
 }
 
-function WorkCard({ w, trash, onRename }: { w: Entry; trash?: boolean; onRename: (e: Entry) => void }) {
+function WorkCard({ w, trash, onRename, tour }: { w: Entry; trash?: boolean; onRename: (e: Entry) => void; tour?: boolean }) {
   const toast = useToast();
   const router = useRouter();
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
@@ -373,6 +422,7 @@ function WorkCard({ w, trash, onRename }: { w: Entry; trash?: boolean; onRename:
   return (
     <li
       className="group relative"
+      data-tour={tour ? "home-work-card" : undefined}
       onContextMenu={(e) => {
         e.preventDefault();
         setAt({ x: e.clientX, y: e.clientY });

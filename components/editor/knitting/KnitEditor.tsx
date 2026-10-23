@@ -40,6 +40,8 @@ import {
   Undo2,
   X,
 } from "./icons";
+import { SpotlightTour, tourSeen } from "@/components/tour/SpotlightTour";
+import { makerTourSteps } from "@/components/tour/makerSteps";
 import { LESSONS, LessonPicker, LessonTour, type LessonId, type LessonProgress } from "./Lesson";
 import {
   BIG_GRID,
@@ -100,7 +102,6 @@ type Drag =
 
 const MY_KEY = "pt:knit:myPatterns";
 const CLIP_KEY = "pt:knit:clipboard";
-const LESSON_SEEN = (id: string) => `pt:knit:lessons-seen:${id}`;
 const MY_MAX = 60;
 /** canvas margins used when framing grids (matches the reference fit: 48px sides, 66px bottom chrome) */
 const FIT_PAD = 48;
@@ -202,7 +203,13 @@ const GridView = memo(function GridView({ grid, geo, active, bg }: { grid: KGrid
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const cv = canvasRef.current;
-    if (!big || !cv) return;
+    if (!cv) return;
+    if (!big) {
+      // a grid that shrank below the canvas threshold: drop the old bitmap
+      cv.width = 0;
+      cv.height = 0;
+      return;
+    }
     let alive = true;
     drawGridCanvas(cv, grid, geo, () => alive, active ? LINE_ACTIVE : undefined).catch(() => {});
     return () => {
@@ -217,9 +224,9 @@ const GridView = memo(function GridView({ grid, geo, active, bg }: { grid: KGrid
   const fs = numFont(geo);
   return (
     <div className="absolute" aria-label="격자" style={{ width: W, height: H, left: grid.x, top: grid.y }}>
-      {big ? (
-        <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute" style={{ left: 0, top: 0, width: W, height: H }} />
-      ) : (
+      {/* the board's canvas layer (as in the reference); only big grids paint into it */}
+      <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute" style={{ left: 0, top: 0, width: W, height: H }} />
+      {!big && (
         <svg aria-hidden="true" className="pointer-events-none absolute top-0 left-0" width={W} height={H} style={{ background: bg }}>
           <g color="#222" dangerouslySetInnerHTML={{ __html: cells! }} />
         </svg>
@@ -346,21 +353,19 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
   const [lesson, setLesson] = useState<{ id: LessonId; n: number } | null>(null);
   const [gen, setGen] = useState(0);
   const fresh = useMemo(() => isFresh(work), [work]);
-  const [picker, setPicker] = useState(() => {
-    if (!fresh) return false;
-    try {
-      return !localStorage.getItem(LESSON_SEEN(work.id));
-    } catch {
-      return false;
-    }
-  });
-  const markSeen = () => {
-    try {
-      localStorage.setItem(LESSON_SEEN(work.id), "1");
-    } catch {
-      /* ignore */
-    }
-  };
+  // first run: the basic tour ("대바늘 도안 만들기"), then the 심화 레슨 picker
+  const [tour, setTour] = useState(false);
+  const [picker, setPicker] = useState(false);
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      if (tourSeen.maker("knitting")) return;
+      setCompact(window.matchMedia("(max-width: 1023px)").matches);
+      setTour(true);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  const tourSteps = useMemo(() => makerTourSteps("knitting", compact), [compact]);
   // after a lesson the real document is read back from storage (it was saved on the way out)
   const current = useMemo(() => {
     if (!gen) return { work, data };
@@ -377,6 +382,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         practice={lesson.id}
         seed={false}
         onLessons={() => setPicker(true)}
+        onTour={() => undefined}
         onExitPractice={() => {
           setLesson(null);
           setGen((g) => g + 1);
@@ -392,18 +398,25 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       data={current.data}
       seed={fresh && gen === 0}
       onLessons={() => setPicker(true)}
+      onTour={() => setTour(true)}
       overlay={
-        picker ? (
+        tour ? (
+          <SpotlightTour
+            open
+            steps={tourSteps}
+            onClose={() => {
+              tourSeen.markMaker("knitting");
+              setTour(false);
+              setPicker(true);
+            }}
+          />
+        ) : picker ? (
           <LessonPicker
             onPick={(id) => {
-              markSeen();
               setPicker(false);
               setLesson({ id, n: Date.now() });
             }}
-            onLater={() => {
-              markSeen();
-              setPicker(false);
-            }}
+            onLater={() => setPicker(false)}
           />
         ) : null
       }
@@ -421,10 +434,12 @@ type EditorProps = {
   practice?: LessonId;
   onExitPractice?: () => void;
   onLessons: () => void;
+  /** 기능 체험하기: reopens the basic tour */
+  onTour: () => void;
   overlay: ReactNode;
 };
 
-function Editor({ work, data, seed, practice, onExitPractice, onLessons, overlay }: EditorProps) {
+function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour, overlay }: EditorProps) {
   const initial = useMemo(() => {
     const d = normalize(data);
     if (seed && !d.grids.length) {
@@ -1993,6 +2008,7 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, overlay
                               </button>
                             )}
                             items={[
+                              { label: "기능 체험하기", onSelect: onTour, disabled: !!practice },
                               { label: "심화 레슨", onSelect: onLessons, disabled: !!practice },
                               { label: "단축키 보기", shortcut: "?", onSelect: () => setHelpOpen(true) },
                             ]}

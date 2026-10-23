@@ -39,6 +39,8 @@ import { Rail, type NavTab } from "./Rail";
 import { BTN, el, sab } from "./seed";
 import { ArrowRightLeft, ChevronDown, Hand, Hash, Minus, MousePointer2, PanelLeft, PenTool, Pencil, Plus, ScrollText } from "./uiIcons";
 import "./crochet-editor.css";
+import { SpotlightTour, tourSeen } from "@/components/tour/SpotlightTour";
+import { makerTourSteps } from "@/components/tour/makerSteps";
 import { myIcons, useMyIcons } from "./myIcons";
 import { ItemsPreview, LayerView } from "./render";
 import { RightPanel, type LayerActions, type PropActions } from "./RightPanel";
@@ -282,6 +284,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const [rightOpen, setRightOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [tour, setTour] = useState(false);
   const [title, setTitle] = useState(work.title);
   const [savedAt, setSavedAt] = useState(work.updatedAt);
   const icons = useMyIcons();
@@ -351,6 +354,14 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // first-run tour ("코바늘 도안 만들기"), once per browser
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      if (!tourSeen.maker("crochet")) setTour(true);
+    });
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   useEffect(() => {
@@ -1410,15 +1421,13 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   })();
 
   const showRight = !narrow || rightOpen;
+  const tourSteps = useMemo(() => makerTourSteps("crochet", narrow), [narrow]);
   const navTab: NavTab = tab === "mine" ? "components" : "symbols";
   const onNav = (t: NavTab) => {
     if (t === "symbols" || t === "components") {
       const want: PaletteTab = t === "components" ? "mine" : "symbols";
-      if (paletteOpen && tab === want) setPaletteOpen(false);
-      else {
-        openPalette(want);
-        if (narrow) setRightOpen(false);
-      }
+      openPalette(want);
+      if (narrow) setRightOpen(false);
       return;
     }
     soon(t === "library" ? "템플릿" : t === "aiConvert" ? "원문·파일로 만들기" : "AI 어시스턴트");
@@ -1782,6 +1791,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                       canRegister={sel.length > 0}
                       onRegister={openRegister}
                       onHelp={() => setHelpOpen(true)}
+                      onTour={() => setTour(true)}
                     />
                   </div>
                 </div>
@@ -1814,6 +1824,14 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
 
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={onExport} />
       <ShortcutDialog open={helpOpen} onClose={() => setHelpOpen(false)} groups={SHORTCUTS} />
+      <SpotlightTour
+        open={tour}
+        steps={tourSteps}
+        onClose={() => {
+          tourSeen.markMaker("crochet");
+          setTour(false);
+        }}
+      />
 
       <Dialog
         open={registerOpen}
