@@ -99,10 +99,10 @@ export function SiteHeader() {
 
         <div className="ml-auto flex shrink-0 items-center gap-x1_5 sm:gap-x3">
           <LangButton className="hidden md:inline-flex" />
-          <a className={`${navLink.replace("inline-flex ", "")} hidden md:inline-flex`} href="/signup">
+          <a className={`${navLink.replace("inline-flex ", "")} hidden md:inline-flex`} href="/home">
             회원가입
           </a>
-          <a className="lp-btn lp-btn-sm lp-btn-primary" href="/login">
+          <a className="lp-btn lp-btn-sm lp-btn-primary" href="/home">
             시작하기
           </a>
           <button
@@ -133,7 +133,7 @@ export function SiteHeader() {
             </ul>
             <div className="my-x2 border-t border-stroke-neutral-muted" />
             <ul className="flex flex-col">
-              {[...links, { href: "/signup", label: "회원가입" }].map((l) => (
+              {[...links, { href: "/home", label: "회원가입" }].map((l) => (
                 <li key={l.href}>
                   <a href={l.href} className="flex h-11 items-center rounded-[10px] px-x3 text-[0.9375rem] font-medium text-fg-neutral hover:bg-bg-layer-fill">
                     {l.label}

@@ -80,7 +80,7 @@ export function Hero() {
       <div className="page-shell relative flex flex-1 flex-col items-center justify-end pt-x10 pb-[calc(15rem+var(--lift))] text-center sm:pt-x16 sm:pb-[calc(20rem+var(--lift))] lg:justify-center lg:py-32">
         <h1 className="lp-display max-w-[14em]">{"뜨개 도안 제작은\n패터너스로 시작하세요"}</h1>
         <div className="mt-x8 flex flex-wrap justify-center gap-x2">
-          <a className="lp-btn lp-btn-primary" href="/signup">
+          <a className="lp-btn lp-btn-primary" href="/home">
             무료로 시작하기
           </a>
           <a href="#landing-features" className="lp-btn lp-btn-secondary bg-bg-layer-default">

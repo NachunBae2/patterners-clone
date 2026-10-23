@@ -26,7 +26,7 @@ const plans: Plan[] = [
       "JPG로 내보내기 (워터마크 포함)",
       "아뜰리에에 무료로 공유",
     ],
-    cta: { label: "무료로 시작하기", href: "/signup" },
+    cta: { label: "무료로 시작하기", href: "/home" },
   },
   {
     name: "Basic",
@@ -36,7 +36,7 @@ const plans: Plan[] = [
     vat: "부가세 포함",
     billing: "매월 결제",
     features: ["Free의 모든 기능 포함", "도안·페이퍼 개수 제한 없음", "PNG·JPG·PDF로 내보내기", "AI 도안 변환 일부 사용"],
-    cta: { label: "시작하기", href: "/signup", primary: true },
+    cta: { label: "시작하기", href: "/home", primary: true },
   },
   {
     name: "Pro",
@@ -53,7 +53,7 @@ const plans: Plan[] = [
       "뜨개옷 패턴 제도 (의류)",
       "신규 기능 최우선 사용",
     ],
-    cta: { label: "Pro 시작하기", href: "/signup" },
+    cta: { label: "Pro 시작하기", href: "/home" },
   },
   {
     name: "Enterprise",

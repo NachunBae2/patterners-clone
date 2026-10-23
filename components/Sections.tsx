@@ -29,7 +29,7 @@ export function BottomCta() {
         <h2 className="lp-h2">첫 도안을 그려 보세요</h2>
         <p className="lp-lead mt-x3 max-w-md">지금 가입하고 Pro 기능을 한 달 동안 무료로 체험해 보세요.</p>
         <div className="mt-x8 flex flex-wrap justify-center gap-x2">
-          <a className="lp-btn lp-btn-primary" href="/signup">
+          <a className="lp-btn lp-btn-primary" href="/home">
             무료로 시작하기
           </a>
           <a href="#landing-features" className="lp-btn lp-btn-secondary bg-bg-layer-default">
