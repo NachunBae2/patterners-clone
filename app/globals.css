@@ -17,6 +17,8 @@
 }
 
 @theme inline {
+  /* bg-layer-fill was dropped in SEED v3; the original design still uses it. */
+  --color-bg-layer-fill: var(--seed-color-bg-layer-fill);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
@@ -45,6 +47,7 @@
   --seed-color-bg-brand-weak-pressed: var(--seed-color-palette-lime-200);
   --seed-color-stroke-brand-solid: var(--seed-color-palette-lime-700);
   --seed-color-stroke-brand-weak: var(--seed-color-palette-lime-300);
+  --seed-color-bg-layer-fill: var(--seed-color-palette-gray-100);
 
   --background: var(--seed-color-bg-layer-default);
   --foreground: var(--seed-color-fg-neutral);
