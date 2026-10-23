@@ -1,0 +1,26 @@
+/* Editor-only rules the shared Tailwind/SEED build doesn't generate (copied from the reference build's values). */
+.size-x9 {
+  width: var(--dimension-x9);
+  height: var(--dimension-x9);
+}
+.w-x8 {
+  width: var(--dimension-x8);
+}
+.panel-tile-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--tile-min, 64px), 100%), 1fr));
+  display: grid;
+}
+.maker-bottom-tools .seed-action-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px !important;
+}
+.maker-bottom-tools .seed-action-button:disabled {
+  color: var(--seed-color-fg-neutral-subtle);
+}
+@media (pointer: coarse) {
+  .maker-bottom-tools button {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+  }
+}

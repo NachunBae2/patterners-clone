@@ -1,16 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorShell, openShortcutHelp, type ShortcutGroup } from "@/components/app/EditorShell";
-import { Fit, FlipH, FlipV, Hand, Hash, Linear, Minus, Pen, Plus, Pointer, Radial, RotateCcw, RotateCw, Stamp, Trash, X } from "@/components/app/icons";
-import { Button, Dialog, IconButton, NumberField, cx, isMod, useToast } from "@/components/app/ui";
+import { Button, Dialog, IconButton, Menu, NumberField, cx, isMod, useToast, type MenuItem } from "@/components/app/ui";
 import { exportSvg, safeName, svgThumbnail } from "@/lib/export";
 import { uid } from "@/lib/id";
 import { works } from "@/lib/store";
 import type { CrochetData, CrochetItem, CrochetLayer, GatherItem, StitchItem, TextItem, View, Work } from "@/lib/types";
 import { useAutosave } from "@/lib/useAutosave";
 import { useHistory } from "@/lib/useHistory";
-import { INK, STROKE_WIDTH, SymbolIcon, defaultSpread, getSymbol, symbolSize } from "@/lib/symbols/crochet";
+import { INK, STROKE_WIDTH, defaultSpread, getSymbol, symbolSize } from "@/lib/symbols/crochet";
+import { QuickSlots, RadialIcon, Toolbar, slotGlyph, type Mode, type Slot } from "./BottomChrome";
 import { CtxMenu, type CtxItem } from "./CtxMenu";
 import {
   boxCenter,
@@ -34,8 +33,12 @@ import {
   type Box,
   type Pt,
 } from "./geometry";
-import { Dots, PanelLeft, PanelRight } from "./icons";
+import { ExportDialog, ShortcutDialog, type ShortcutGroup } from "./EditorDialogs";
 import { MyIconPreview, Palette, type PaletteTab, type Picked } from "./Palette";
+import { Rail, type NavTab } from "./Rail";
+import { BTN, el, sab } from "./seed";
+import { ArrowRightLeft, ChevronDown, Hand, Hash, Minus, MousePointer2, PanelLeft, PenTool, Pencil, Plus, ScrollText } from "./uiIcons";
+import "./crochet-editor.css";
 import { myIcons, useMyIcons } from "./myIcons";
 import { ItemsPreview, LayerView } from "./render";
 import { RightPanel, type LayerActions, type PropActions } from "./RightPanel";
@@ -43,7 +46,6 @@ import { RightPanel, type LayerActions, type PropActions } from "./RightPanel";
 // ---------- types ----------
 
 type Doc = Omit<CrochetData, "view">;
-type Mode = "select" | "insert" | "pan" | "pen" | "linear" | "radial" | "number";
 type Template = { items: CrochetItem[]; w: number; h: number };
 
 type Drag =
@@ -76,16 +78,22 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 const CLIP_KEY = "pt:crochet:clipboard";
 const NUMBER_COLOR = "#4b5563";
 
-const TOOLS: ({ mode: Mode; label: string; key: string; icon: (p: { className?: string }) => React.ReactNode } | "sep")[] = [
-  { mode: "select", label: "선택", key: "V", icon: Pointer },
-  { mode: "insert", label: "삽입", key: "E", icon: Stamp },
+/** Height of the quick slots + toolbar stack; the empty canvas centres above it (reference --maker-bottom-chrome). */
+const BOTTOM_CHROME = 154;
+const PALETTE_W = 264;
+const PALETTE_MIN = 224;
+const PALETTE_MAX = 480;
+const DEFAULT_SLOTS = ["sc", "dc", "ch", "hdc", "slst"];
+const LEGACY_DEFAULT_SLOTS = ["ch", "sc", "hdc", "dc", null];
+
+const MODES: { mode: Mode; label: string; key: string; icon: (p: { className?: string }) => React.ReactNode }[] = [
+  { mode: "select", label: "선택", key: "V", icon: MousePointer2 },
+  { mode: "insert", label: "삽입", key: "E", icon: Pencil },
   { mode: "pan", label: "이동", key: "H", icon: Hand },
-  "sep",
-  { mode: "pen", label: "펜 도구", key: "P", icon: Pen },
-  "sep",
-  { mode: "linear", label: "평면 만들기", key: "L", icon: Linear },
-  { mode: "radial", label: "원형 만들기", key: "O", icon: Radial },
-  { mode: "number", label: "단 숫자 넣기", key: "N", icon: Hash },
+  { mode: "pen", label: "펜", key: "P", icon: PenTool },
+  { mode: "linear", label: "평면", key: "L", icon: ArrowRightLeft },
+  { mode: "radial", label: "원형", key: "O", icon: RadialIcon },
+  { mode: "number", label: "단 숫자", key: "N", icon: Hash },
 ];
 
 const SHORTCUTS: ShortcutGroup[] = [
@@ -149,9 +157,13 @@ const SHORTCUTS: ShortcutGroup[] = [
 // ---------- doc helpers ----------
 
 function normalize(d: CrochetData): CrochetData {
-  const layers: CrochetLayer[] = d.layers?.length ? d.layers : [{ id: uid(), name: "1단", visible: true, items: [] }];
-  const activeLayerId = layers.some((l) => l.id === d.activeLayerId) ? d.activeLayerId : layers[layers.length - 1].id;
-  const quickSlots = [...(d.quickSlots ?? []), null, null, null, null, null].slice(0, 5);
+  let layers: CrochetLayer[] = d.layers ?? [];
+  // a fresh chart has no rounds yet: the first placed stitch creates 1단
+  if (layers.length === 1 && !layers[0].items.length && layers[0].name === "1단" && layers[0].visible && !layers[0].color) layers = [];
+  const activeLayerId = layers.some((l) => l.id === d.activeLayerId) ? d.activeLayerId : (layers[layers.length - 1]?.id ?? "");
+  let slots = d.quickSlots ?? [];
+  if (!slots.length || JSON.stringify(slots) === JSON.stringify(LEGACY_DEFAULT_SLOTS)) slots = DEFAULT_SLOTS;
+  const quickSlots = [...slots, null, null, null, null, null].slice(0, 5);
   return { layers, activeLayerId, quickSlots, showGrid: d.showGrid ?? true, view: d.view ?? { x: 0, y: 0, zoom: 1 } };
 }
 
@@ -173,10 +185,15 @@ function mapItems(d: Doc, ids: Set<string>, fn: (it: CrochetItem) => CrochetItem
   };
 }
 
-const addItems = (d: Doc, layerId: string, items: CrochetItem[]): Doc => ({
-  ...d,
-  layers: d.layers.map((l) => (l.id === layerId ? { ...l, items: [...l.items, ...items] } : l)),
-});
+/** Adds items to a layer; with no layers yet, creates 1단 for them (and makes it active). */
+const addItems = (d: Doc, layerId: string, items: CrochetItem[]): Doc => {
+  if (!d.layers.length) {
+    const layer: CrochetLayer = { id: uid(), name: "1단", visible: true, items };
+    return { ...d, layers: [layer], activeLayerId: layer.id };
+  }
+  const target = d.layers.some((l) => l.id === layerId) ? layerId : d.layers[d.layers.length - 1].id;
+  return { ...d, layers: d.layers.map((l) => (l.id === target ? { ...l, items: [...l.items, ...items] } : l)) };
+};
 
 function findItem(d: Doc, id: string): { item: CrochetItem; layer: CrochetLayer } | null {
   for (const layer of d.layers) for (const item of layer.items) if (item.id === id) return { item, layer };
@@ -235,6 +252,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   }, []);
 
   const [tab, setTab] = useState<PaletteTab>("symbols");
+  const narrowRef = useRef(false);
   const [query, setQuery] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [space, setSpace] = useState(false);
@@ -259,8 +277,13 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const [deleteIconId, setDeleteIconId] = useState<string | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [narrow, setNarrow] = useState(false);
-  const [leftOpen, setLeftOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(true);
+  const [paletteW, setPaletteW] = useState(PALETTE_W);
   const [rightOpen, setRightOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [title, setTitle] = useState(work.title);
+  const [savedAt, setSavedAt] = useState(work.updatedAt);
   const icons = useMyIcons();
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -290,6 +313,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const selectedForPanel = useMemo(() => sel.map((id) => ({ item: index.get(id)!.item, fallback: index.get(id)!.layer.color ?? INK })), [sel, index]);
   const selBounds = useMemo(() => unionBounds(selItems), [selItems]);
   const activeLayer = doc.layers.find((l) => l.id === doc.activeLayerId) ?? doc.layers[0];
+  const activeColor = activeLayer?.color ?? INK;
 
   // ---------- autosave ----------
 
@@ -299,6 +323,25 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     return svgThumbnail(svg ?? `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="#ffffff"/></svg>`);
   }, [doc.layers]);
   const status = useAutosave(work.id, saveData, thumb);
+  // last save time of the chart itself (view-only saves keep the stamp)
+  const prevStatus = useRef(status);
+  const initialDoc = useRef(doc);
+  useEffect(() => {
+    if (prevStatus.current === "saving" && status === "saved" && doc !== initialDoc.current) setSavedAt(Date.now());
+    prevStatus.current = status;
+  }, [status, doc]);
+  const rename = useCallback(
+    (t: string) => {
+      setTitle(t);
+      works.update(work.id, { title: t, updatedAt: Date.now() });
+    },
+    [work.id],
+  );
+  const soon = useCallback((what?: string) => toast(what ? `${what} · 준비 중이에요` : "준비 중이에요"), [toast]);
+  const openPalette = useCallback((t: PaletteTab) => {
+    setTab(t);
+    setPaletteOpen(true);
+  }, []);
 
   // ---------- canvas size, initial view, responsive ----------
 
@@ -312,7 +355,11 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1023px)");
-    const on = () => setNarrow(mq.matches);
+    const on = () => {
+      narrowRef.current = mq.matches;
+      setNarrow(mq.matches);
+      if (mq.matches) setPaletteOpen(false);
+    };
     on();
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
@@ -322,12 +369,12 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     (b: Box | null) => {
       const el = svgRef.current;
       if (!el) return;
-      const W = el.clientWidth, H = el.clientHeight;
+      const W = el.clientWidth, H = Math.max(120, el.clientHeight - BOTTOM_CHROME);
       if (!b) {
-        setView({ x: W / 2, y: H / 2, zoom: 2 });
+        setView({ x: Math.round(W / 2), y: Math.round(H / 2), zoom: 1 });
         return;
       }
-      const pad = 96;
+      const pad = 72;
       const bw = Math.max(b.x1 - b.x0, 40), bh = Math.max(b.y1 - b.y0, 40);
       const zoom = clampZoom(Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 2.5));
       const c = boxCenter(b);
@@ -397,8 +444,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       const clean = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
       if (clean.length >= 2) {
         const d = h.get();
-        const layer = d.layers.find((l) => l.id === d.activeLayerId)!;
-        const item: CrochetItem = { id: uid(), type: "stroke", points: clean, closed: closed || undefined, width: STROKE_WIDTH, dash: "solid", ...(layer.color ? { color: layer.color } : {}) };
+        const layer = d.layers.find((l) => l.id === d.activeLayerId);
+        const item: CrochetItem = { id: uid(), type: "stroke", points: clean, closed: closed || undefined, width: STROKE_WIDTH, dash: "solid", ...(layer?.color ? { color: layer.color } : {}) };
         h.set(addItems(d, d.activeLayerId, [item]));
       }
       setPenPts([]);
@@ -434,7 +481,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         toast(`슬롯 ${slot + 1}에 「${pickName(p)}」을(를) 등록했어요`);
       }
       setPicked(p);
-      setLeftOpen(false);
+      if (narrowRef.current) setPaletteOpen(false);
       setModeState((m) => (m === "linear" || m === "radial" ? m : "insert"));
       setLinear((l) => (l && l.final ? l : null));
     },
@@ -613,7 +660,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         x: Math.round(cx0 * 100) / 100,
         y: Math.round(cy0 * 100) / 100,
         rotation,
-        spread: defaultSpread(leg),
+        spread: defaultSpread(leg, Math.min(9, legs.length)),
         ...(legs[0].color ? { color: legs[0].color } : {}),
       };
       const ids = new Set(legs.map((l) => l.id));
@@ -627,7 +674,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     (kind: "increase" | "decrease", count: number) => {
       const st = legStitches()[0];
       if (!st) return;
-      const g: GatherItem = { id: uid(), type: "gather", kind, symbol: st.symbol, count, x: st.x, y: st.y, rotation: st.rotation, spread: defaultSpread(st.symbol), ...(st.color ? { color: st.color } : {}), ...(st.groupId ? { groupId: st.groupId } : {}) };
+      const g: GatherItem = { id: uid(), type: "gather", kind, symbol: st.symbol, count, x: st.x, y: st.y, rotation: st.rotation, spread: defaultSpread(st.symbol, count), ...(st.color ? { color: st.color } : {}), ...(st.groupId ? { groupId: st.groupId } : {}) };
       h.set((d) => mapItems(d, new Set([st.id]), () => g));
       setSelection([g.id]);
     },
@@ -668,7 +715,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       const p = slotToPick(h.get().quickSlots[i] ?? null);
       if (!p || !templateFor(p)) {
         setAssignSlot(i);
-        setLeftOpen(true);
+        openPalette("symbols");
         return;
       }
       setPicked(p);
@@ -741,8 +788,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       return;
     }
     const d = h.get();
-    const layer = d.layers.find((l) => l.id === d.activeLayerId)!;
-    if (!layer.visible) {
+    const layer = d.layers.find((l) => l.id === d.activeLayerId);
+    if (layer && !layer.visible) {
       toast("숨긴 레이어에는 놓을 수 없어요. 레이어를 표시해 주세요");
       return;
     }
@@ -868,7 +915,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         for (const l of h.get().layers) {
           if (!l.visible) continue;
           for (const it of l.items) {
-            if (it.type === "stitch" && it.symbol === "mr" && Math.hypot(it.x - P.x, it.y - P.y) < 18) {
+            if (it.type === "stitch" && (it.symbol === "magic_ring" || it.symbol === "mr") && Math.hypot(it.x - P.x, it.y - P.y) < 18) {
               start = { x: it.x, y: it.y };
               fromCenter = true;
             }
@@ -1157,7 +1204,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         return;
       }
       case "?":
-        openShortcutHelp();
+        setHelpOpen(true);
         return;
     }
     if (/^[1-5]$/.test(k)) return takeSlot(Number(k) - 1);
@@ -1240,7 +1287,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     if (ctx.slot !== undefined) {
       const i = ctx.slot;
       return [
-        { label: "슬롯 수정", onSelect: () => (setAssignSlot(i), setLeftOpen(true)) },
+        { label: "슬롯 수정", onSelect: () => (setAssignSlot(i), openPalette("symbols")) },
         { label: "슬롯 해제", danger: true, onSelect: () => h.set((d) => ({ ...d, quickSlots: d.quickSlots.map((v, j) => (j === i ? null : v)) })) },
       ];
     }
@@ -1257,6 +1304,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         { label: "붙여넣기", shortcut: "⌘V", disabled: !hasClip, onSelect: paste },
         { label: "모두 선택", shortcut: "⌘A", onSelect: selectAll },
         { label: "화면에 맞추기", shortcut: "⌘0", onSelect: fitAll },
+        "separator",
+        { label: h.get().showGrid ? "점 격자 숨기기" : "점 격자 표시", shortcut: "G", onSelect: () => h.set((d) => ({ ...d, showGrid: !d.showGrid })) },
       ];
     }
     const legs = items.filter((it) => it.type === "stitch" && getSymbol(it.symbol)?.leg);
@@ -1288,6 +1337,16 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       { label: "붙여넣기", shortcut: "⌘V", disabled: !hasClip, onSelect: paste },
       { label: "복제", shortcut: "⌘D", onSelect: duplicateSel },
       "separator",
+      {
+        label: "회전·뒤집기",
+        children: [
+          { label: "오른쪽으로 15° 회전", shortcut: "R", onSelect: () => rotateSel(15) },
+          { label: "왼쪽으로 15° 회전", shortcut: "⇧R", onSelect: () => rotateSel(-15) },
+          "separator",
+          { label: "좌우 뒤집기", shortcut: "⇧H", onSelect: () => flipSel("h") },
+          { label: "상하 뒤집기", shortcut: "⇧V", onSelect: () => flipSel("v") },
+        ],
+      },
       items.some((it) => it.groupId)
         ? { label: "그룹 해제", shortcut: "⇧⌘G", onSelect: ungroupSel }
         : { label: "그룹 만들기", shortcut: "⌘G", disabled: items.length < 2, onSelect: groupSel },
@@ -1296,7 +1355,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       { label: "삭제하기", shortcut: "Del", danger: true, onSelect: deleteSel },
     );
     return out;
-  }, [ctx, selItems, h, paste, selectAll, fitAll, mergeGather, convertGather, splitGather, copySel, deleteSel, duplicateSel, ungroupSel, groupSel, openRegister]);
+  }, [ctx, selItems, h, paste, selectAll, fitAll, mergeGather, convertGather, splitGather, copySel, deleteSel, duplicateSel, ungroupSel, groupSel, openRegister, rotateSel, flipSel]);
   const closeCtx = useCallback(() => setCtx(null), []);
 
   // ---------- render helpers ----------
@@ -1324,7 +1383,6 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     if (mode === "linear" && !linear?.final) return "드래그로 나열 · Shift: 가로/세로 · Space/휠로 이동·확대";
     if (mode === "radial" && !radial?.final) return "드래그로 원(타원) · Shift: 정원 · 매직링에서 시작하면 가운데에 맞춰요";
     if (mode === "number") return `캔버스를 클릭해 놓기 (다음 ${numberNext}) · Backspace 직전 취소 · Esc 종료`;
-    if (mode === "insert") return `${pickName(picked)} · 클릭해서 놓기 · ⌘(Ctrl)를 누르면 스냅 끄기`;
     return null;
   })();
 
@@ -1351,387 +1409,411 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     return { x: p.x + dir.x * 12, y: p.y + dir.y * 12, label: "좌·우로 드래그 · 늘리기 / 줄이기" };
   })();
 
-  const showLeft = !narrow || leftOpen;
   const showRight = !narrow || rightOpen;
+  const navTab: NavTab = tab === "mine" ? "components" : "symbols";
+  const onNav = (t: NavTab) => {
+    if (t === "symbols" || t === "components") {
+      const want: PaletteTab = t === "components" ? "mine" : "symbols";
+      if (paletteOpen && tab === want) setPaletteOpen(false);
+      else {
+        openPalette(want);
+        if (narrow) setRightOpen(false);
+      }
+      return;
+    }
+    soon(t === "library" ? "템플릿" : t === "aiConvert" ? "원문·파일로 만들기" : "AI 어시스턴트");
+  };
+
+  // panel resize (drag the right edge, double-click resets)
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = paletteW;
+    const move = (ev: PointerEvent) => setPaletteW(Math.round(Math.min(PALETTE_MAX, Math.max(PALETTE_MIN, w0 + ev.clientX - x0))));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const curMode = MODES.find((m) => m.mode === (space ? "pan" : mode)) ?? MODES[0];
+  const modeItems: MenuItem[] = MODES.map((m) => ({ label: `${m.label}`, shortcut: m.key, onSelect: () => setMode(m.mode) }));
+  const zoomItems: MenuItem[] = [
+    { label: "확대", shortcut: "⌘+", onSelect: () => zoomCenter(1.25) },
+    { label: "축소", shortcut: "⌘−", onSelect: () => zoomCenter(0.8) },
+    { label: "100%로 보기", onSelect: () => zoomCenter(1 / zoom) },
+    { label: "화면에 맞추기", shortcut: "⌘0", onSelect: fitAll },
+    "separator",
+    { label: doc.showGrid ? "점 격자 숨기기" : "점 격자 표시", shortcut: "G", onSelect: () => h.set((d) => ({ ...d, showGrid: !d.showGrid })) },
+  ];
+
+  const slots: Slot[] = doc.quickSlots.map((v) => {
+    const p = slotToPick(v);
+    const myIcon = p?.kind === "my" ? icons.find((m) => m.id === p.id) : undefined;
+    const filled = !!p && (p.kind === "symbol" ? !!getSymbol(p.id) : !!myIcon);
+    return {
+      label: pickName(p),
+      filled,
+      active: filled && !!picked && pickToSlot(picked) === v && mode === "insert",
+      render: () => (p?.kind === "symbol" ? slotGlyph(p.id) : myIcon ? <MyIconPreview icon={myIcon} size={22} /> : null),
+    };
+  });
+  const clearSlot = (i: number) => h.set((d) => ({ ...d, quickSlots: d.quickSlots.map((v, j) => (j === i ? null : v)) }));
+
+  const bgStyle: React.CSSProperties = {
+    backgroundColor: "rgb(255, 255, 255)",
+    ...(doc.showGrid
+      ? { backgroundImage: "radial-gradient(oklch(0.78 0.01 260 / 0.35) 1px, transparent 1px)", backgroundSize: `${gs}px ${gs}px`, backgroundPosition: `${vx % gs}px ${vy % gs}px` }
+      : {}),
+  };
 
   return (
-    <EditorShell
-      workId={work.id}
-      title={work.title}
-      craftLabel="코바늘"
-      status={status}
-      canUndo={h.canUndo}
-      canRedo={h.canRedo}
-      onUndo={h.undo}
-      onRedo={h.redo}
-      onExport={onExport}
-      shortcuts={SHORTCUTS}
-    >
-      <div className="absolute inset-0 flex">
-        {/* left: palette */}
-        {showLeft && (
-          <aside
-            aria-label="기호 팔레트"
-            className={cx(
-              "z-20 flex w-[264px] shrink-0 flex-col border-r border-stroke-neutral-muted bg-bg-layer-default",
-              narrow && "absolute inset-y-0 left-0 shadow-s3",
-            )}
-          >
-            {narrow && (
-              <div className="flex justify-end px-x2 pt-x2">
-                <IconButton label="닫기" size="sm" onClick={() => setLeftOpen(false)}>
-                  <X />
-                </IconButton>
+    <div className="fixed top-0 left-0 z-20 h-dvh w-full overflow-hidden overscroll-none text-fg-neutral select-none" data-editor-shell>
+      <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-layer-fill" data-editor-chrome="true">
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          <Rail tab={navTab} open={paletteOpen} onTab={onNav} onExport={() => setExportOpen(true)} />
+          <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            {/* palette */}
+            {paletteOpen && (
+              <div
+                data-tour="palette"
+                className={cx("relative z-[90] h-full shrink-0 overflow-visible transition-shadow", narrow && "absolute inset-y-0 left-0 shadow-s3")}
+                style={{ width: paletteW }}
+              >
+                <div className="relative h-full shrink-0" style={{ width: paletteW }}>
+                  <Palette
+                    title={title}
+                    onRename={rename}
+                    status={status}
+                    onCollapse={() => setPaletteOpen(false)}
+                    tab={tab}
+                    query={query}
+                    onQuery={setQuery}
+                    picked={picked}
+                    onPick={pick}
+                    icons={icons}
+                    canSave={sel.length > 0}
+                    onSaveSelection={openRegister}
+                    onDeleteIcon={setDeleteIconId}
+                    assigning={assignSlot !== null}
+                  />
+                </div>
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="패널 너비 조절 (끌어서 바꾸고, 두 번 누르면 원래대로)"
+                  aria-valuemin={PALETTE_MIN}
+                  aria-valuemax={PALETTE_MAX}
+                  aria-valuenow={paletteW}
+                  title="패널 너비 조절 (끌어서 바꾸고, 두 번 누르면 원래대로)"
+                  tabIndex={0}
+                  onPointerDown={startResize}
+                  onDoubleClick={() => setPaletteW(PALETTE_W)}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowLeft") setPaletteW((w) => Math.max(PALETTE_MIN, w - 16));
+                    if (e.key === "ArrowRight") setPaletteW((w) => Math.min(PALETTE_MAX, w + 16));
+                  }}
+                  className="group/resize absolute inset-y-0 -right-[3px] z-[95] w-1.5 cursor-col-resize touch-none outline-none"
+                >
+                  <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-stroke-brand-solid group-focus-visible/resize:bg-stroke-brand-solid" />
+                </div>
               </div>
             )}
-            <Palette
-              tab={tab}
-              onTab={setTab}
-              query={query}
-              onQuery={setQuery}
-              picked={picked}
-              onPick={pick}
-              icons={icons}
-              canSave={sel.length > 0}
-              onSaveSelection={openRegister}
-              onDeleteIcon={setDeleteIconId}
-              assigning={assignSlot !== null}
-            />
-          </aside>
-        )}
 
-        {/* centre: canvas */}
-        <div ref={wrapRef} className="relative min-w-0 flex-1 overflow-hidden bg-[#f6f6f4]">
-          <svg
-            ref={svgRef}
-            data-testid="crochet-canvas"
-            className="absolute inset-0 h-full w-full touch-none"
-            style={{ cursor }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-            onPointerLeave={() => !dragRef.current && setHover(null)}
-            onContextMenu={onContextMenu}
-            onDoubleClick={onDoubleClick}
-          >
-            <defs>
-              <pattern id="pt-crochet-dots" patternUnits="userSpaceOnUse" width={gs} height={gs} x={vx % gs} y={vy % gs}>
-                <circle cx={0.75} cy={0.75} r={gs < 10 ? 0.6 : 0.9} fill="#c9c9c4" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill={doc.showGrid ? "url(#pt-crochet-dots)" : "transparent"} />
-
-            {/* world */}
-            <g transform={worldT} fill="none" strokeWidth={STROKE_WIDTH} strokeLinecap="round" strokeLinejoin="round">
-              {doc.layers.map((l) => (
-                <LayerView key={l.id} layer={l} dim={activeOnly && l.id !== doc.activeLayerId} />
-              ))}
-
-              {/* per-item selection outlines */}
-              {sel.length > 0 && sel.length <= 400 && (
-                <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25} vectorEffect="non-scaling-stroke">
-                  {selItems.map((it) => {
-                    if (it.type === "stitch" || it.type === "gather") {
-                      const { w, h: hh } = itemGeom(it);
-                      return <rect key={it.id} x={-w / 2 - 2} y={-hh / 2 - 2} width={w + 4} height={hh + 4} rx={3} transform={stitchTransform(it)} vectorEffect="non-scaling-stroke" />;
-                    }
-                    const b = itemBounds(it);
-                    return <rect key={it.id} x={b.x0 - 2} y={b.y0 - 2} width={b.x1 - b.x0 + 4} height={b.y1 - b.y0 + 4} rx={3} vectorEffect="non-scaling-stroke" />;
-                  })}
-                </g>
-              )}
-
-              {/* ghosts & drafts */}
-              {ghost && (
-                <g opacity={0.45} pointerEvents="none">
-                  <ItemsPreview items={ghost} color={activeLayer.color ?? INK} />
-                </g>
-              )}
-              {mode === "number" && hover && !space && (
-                <text x={hover.x} y={hover.y} fontSize={14} fontWeight={600} textAnchor="middle" dominantBaseline="central" fill={NUMBER_COLOR} opacity={0.5} stroke="none" pointerEvents="none">
-                  {numberNext}
-                </text>
-              )}
-              {pen.length > 0 && (
-                <g pointerEvents="none">
-                  <path
-                    d={pen.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("") + (hover ? `L${hover.x} ${hover.y}` : "")}
-                    stroke={activeLayer.color ?? INK}
-                    strokeWidth={STROKE_WIDTH}
-                    fill="none"
-                  />
-                  {pen.map(([x, y], i) => (
-                    <circle key={i} cx={x} cy={y} r={3.5 / zoom} fill={i === 0 ? "#5f9c1a" : "#fff"} stroke="#5f9c1a" strokeWidth={1.25 / zoom} />
-                  ))}
-                </g>
-              )}
-              {linear && (
-                <line x1={linear.a.x} y1={linear.a.y} x2={linear.b.x} y2={linear.b.y} stroke="#5f9c1a" strokeWidth={1.25 / zoom} strokeDasharray={`${4 / zoom} ${4 / zoom}`} pointerEvents="none" />
-              )}
-              {radial && (
-                <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25 / zoom}>
-                  <ellipse cx={radial.c.x} cy={radial.c.y} rx={radial.rx} ry={radial.ry} strokeDasharray={`${4 / zoom} ${4 / zoom}`} />
-                  <path d={`M${radial.c.x - 5 / zoom} ${radial.c.y}h${10 / zoom}M${radial.c.x} ${radial.c.y - 5 / zoom}v${10 / zoom}`} />
-                </g>
-              )}
-            </g>
-
-            {/* screen-space overlays */}
-            {marquee && (
-              <rect
-                x={Math.min(marquee.a.x, marquee.b.x) * zoom + vx}
-                y={Math.min(marquee.a.y, marquee.b.y) * zoom + vy}
-                width={Math.abs(marquee.b.x - marquee.a.x) * zoom}
-                height={Math.abs(marquee.b.y - marquee.a.y) * zoom}
-                fill="rgba(124,197,34,0.08)"
-                stroke="#5f9c1a"
-                strokeWidth={1}
-                pointerEvents="none"
-              />
-            )}
-            {mode === "select" && selScreen && !marquee && (
-              <g>
-                {sel.length > 1 && (
-                  <rect
-                    x={selScreen.a.x - 6}
-                    y={selScreen.a.y - 6}
-                    width={selScreen.b.x - selScreen.a.x + 12}
-                    height={selScreen.b.y - selScreen.a.y + 12}
-                    fill="none"
-                    stroke="#5f9c1a"
-                    strokeDasharray="4 3"
-                    pointerEvents="none"
-                  />
-                )}
-                <line x1={(selScreen.a.x + selScreen.b.x) / 2} y1={selScreen.a.y - 6} x2={(selScreen.a.x + selScreen.b.x) / 2} y2={selScreen.a.y - 26} stroke="#5f9c1a" pointerEvents="none" />
-                <g data-handle="rotate" style={{ cursor: "grab" }}>
-                  <title>드래그해 회전 · Shift: 15°씩</title>
-                  <circle cx={(selScreen.a.x + selScreen.b.x) / 2} cy={selScreen.a.y - 32} r={11} fill="transparent" />
-                  <circle cx={(selScreen.a.x + selScreen.b.x) / 2} cy={selScreen.a.y - 32} r={6} fill="#fff" stroke="#5f9c1a" strokeWidth={1.5} />
-                </g>
-                {stretchHandle && (
-                  <g data-handle="stretch" style={{ cursor: "ns-resize" }}>
-                    <title>{stretchHandle.label}</title>
-                    <circle cx={stretchHandle.x} cy={stretchHandle.y} r={10} fill="transparent" />
-                    <rect x={stretchHandle.x - 5} y={stretchHandle.y - 5} width={10} height={10} rx={2} fill="#5f9c1a" stroke="#fff" strokeWidth={1.5} />
-                  </g>
-                )}
-              </g>
-            )}
-          </svg>
-
-          {/* top chips */}
-          <div className="pointer-events-none absolute inset-x-0 top-3 flex flex-col items-center gap-x1_5 px-x16">
-            {sel.length > 0 && (
-              <span className="rounded-full bg-bg-neutral-inverted px-x3 py-x1 text-[0.75rem] font-semibold text-fg-neutral-inverted shadow-s1" data-testid="selection-chip">
-                {sel.length}개 선택
-              </span>
-            )}
-            {hint && (
-              <span className="rounded-full border border-stroke-neutral-muted bg-bg-layer-default/95 px-x3 py-x1 text-[0.75rem] text-fg-neutral-muted shadow-s1" data-testid="canvas-hint">
-                {hint}
-              </span>
-            )}
-          </div>
-
-          {narrow && (
-            <>
-              <Button size="sm" className="absolute top-3 left-3 shadow-s1" onClick={() => (setLeftOpen((v) => !v), setRightOpen(false))}>
-                <PanelLeft className="size-4" />
-                기호
-              </Button>
-              <Button size="sm" className="absolute top-3 right-3 shadow-s1" onClick={() => (setRightOpen((v) => !v), setLeftOpen(false))}>
-                레이어
-                <PanelRight className="size-4" />
-              </Button>
-            </>
-          )}
-
-          {/* quick slots */}
-          <div role="group" aria-label="퀵 슬롯" className="absolute bottom-4 left-4 flex flex-col gap-x1 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default p-x1 shadow-s2">
-            {doc.quickSlots.map((v, i) => {
-              const p = slotToPick(v);
-              const myIcon = p?.kind === "my" ? icons.find((m) => m.id === p.id) : undefined;
-              const filled = !!p && (p.kind === "symbol" ? !!getSymbol(p.id) : !!myIcon);
-              const active = filled && picked && pickToSlot(picked) === v && mode !== "select";
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  aria-label={filled ? `슬롯 ${i + 1} 삽입 · ${pickName(p)}` : `슬롯 ${i + 1} 등록`}
-                  title={filled ? `${i + 1} · ${pickName(p)}` : `슬롯 ${i + 1} 등록`}
-                  onClick={() => takeSlot(i)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    if (filled) setCtx({ x: e.clientX, y: e.clientY, slot: i });
-                  }}
-                  className={cx(
-                    "relative flex size-10 items-center justify-center rounded-r2 border transition-colors",
-                    assignSlot === i ? "border-stroke-neutral-contrast bg-bg-layer-fill" : active ? "border-stroke-neutral-contrast" : "border-transparent hover:bg-bg-layer-fill",
-                    !filled && "border-dashed border-stroke-neutral-weak text-fg-neutral-subtle",
-                  )}
-                >
-                  {filled ? p!.kind === "symbol" ? <SymbolIcon id={p!.id} size={30} /> : <MyIconPreview icon={myIcon!} size={30} /> : <Plus className="size-3.5" />}
-                  {/* layout-audit-ignore: tiny-text — slot index badge inside a 40px key, label also in aria-label/title */}
-                  <span className="absolute top-0.5 left-1 text-[0.625rem] font-semibold text-fg-neutral-subtle tabular-nums">{i + 1}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* repeat popovers */}
-          {(linear?.final || radial?.final) && template && (
-            <div className="absolute bottom-[76px] left-1/2 z-10 flex -translate-x-1/2 items-center gap-x3 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x2 pr-x2 pl-x3 shadow-s2" role="dialog" aria-label={linear ? "평면 만들기" : "원형 만들기"}>
-              <span className="text-[0.8125rem] font-semibold whitespace-nowrap">{linear ? "평면 만들기" : "원형 만들기"}</span>
-              <NumberField
-                label="반복 개수"
-                value={(linear ?? radial)!.count}
-                min={1}
-                max={300}
-                onChange={(n) => (linear ? setLinear({ ...linear, count: n }) : radial && setRadial({ ...radial, count: n }))}
-              />
-              {radial && (
-                <>
-                  <NumberField
-                    label="크기"
-                    value={Math.round(radial.rx)}
-                    min={2}
-                    max={4000}
-                    onChange={(r) => setRadial({ ...radial, rx: r, ry: radial.rx > 0 ? (radial.ry * r) / radial.rx : r })}
-                  />
-                  <button
-                    type="button"
-                    className="text-[0.75rem] whitespace-nowrap text-fg-neutral-muted underline-offset-2 hover:underline"
-                    onClick={() => setRadial({ ...radial, count: radialAutoCount(radial.rx, radial.ry, template.w) })}
+            <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              {/* canvas */}
+              <div ref={wrapRef} data-tour="canvas" className="@container/maker-canvas relative min-h-0 min-w-0 flex-1 overflow-hidden">
+                <div data-canvas-surface="true" className="absolute inset-0 overflow-hidden" style={bgStyle}>
+                  <svg
+                    ref={svgRef}
+                    data-testid="crochet-canvas"
+                    className="absolute inset-0 h-full w-full touch-none"
+                    style={{ cursor }}
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                    onPointerCancel={onPointerUp}
+                    onPointerLeave={() => !dragRef.current && setHover(null)}
+                    onContextMenu={onContextMenu}
+                    onDoubleClick={onDoubleClick}
                   >
-                    자동 {radialAutoCount(radial.rx, radial.ry, template.w)}개
-                  </button>
-                </>
+                    <rect width="100%" height="100%" fill="transparent" />
+
+                    {/* world */}
+                    <g transform={worldT} fill="none" strokeWidth={STROKE_WIDTH} strokeLinecap="round" strokeLinejoin="round">
+                      {doc.layers.map((l) => (
+                        <LayerView key={l.id} layer={l} dim={activeOnly && l.id !== doc.activeLayerId} />
+                      ))}
+
+                      {/* per-item selection outlines */}
+                      {sel.length > 0 && sel.length <= 400 && (
+                        <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25} vectorEffect="non-scaling-stroke">
+                          {selItems.map((it) => {
+                            if (it.type === "stitch" || it.type === "gather") {
+                              const { w, h: hh } = itemGeom(it);
+                              return <rect key={it.id} x={-w / 2 - 2} y={-hh / 2 - 2} width={w + 4} height={hh + 4} rx={3} transform={stitchTransform(it)} vectorEffect="non-scaling-stroke" />;
+                            }
+                            const b = itemBounds(it);
+                            return <rect key={it.id} x={b.x0 - 2} y={b.y0 - 2} width={b.x1 - b.x0 + 4} height={b.y1 - b.y0 + 4} rx={3} vectorEffect="non-scaling-stroke" />;
+                          })}
+                        </g>
+                      )}
+
+                      {/* ghosts & drafts */}
+                      {ghost && (
+                        <g opacity={0.45} pointerEvents="none">
+                          <ItemsPreview items={ghost} color={activeColor} />
+                        </g>
+                      )}
+                      {mode === "number" && hover && !space && (
+                        <text x={hover.x} y={hover.y} fontSize={14} fontWeight={600} textAnchor="middle" dominantBaseline="central" fill={NUMBER_COLOR} opacity={0.5} stroke="none" pointerEvents="none">
+                          {numberNext}
+                        </text>
+                      )}
+                      {pen.length > 0 && (
+                        <g pointerEvents="none">
+                          <path d={pen.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("") + (hover ? `L${hover.x} ${hover.y}` : "")} stroke={activeColor} strokeWidth={STROKE_WIDTH} fill="none" />
+                          {pen.map(([x, y], i) => (
+                            <circle key={i} cx={x} cy={y} r={3.5 / zoom} fill={i === 0 ? "#5f9c1a" : "#fff"} stroke="#5f9c1a" strokeWidth={1.25 / zoom} />
+                          ))}
+                        </g>
+                      )}
+                      {linear && <line x1={linear.a.x} y1={linear.a.y} x2={linear.b.x} y2={linear.b.y} stroke="#5f9c1a" strokeWidth={1.25 / zoom} strokeDasharray={`${4 / zoom} ${4 / zoom}`} pointerEvents="none" />}
+                      {radial && (
+                        <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25 / zoom}>
+                          <ellipse cx={radial.c.x} cy={radial.c.y} rx={radial.rx} ry={radial.ry} strokeDasharray={`${4 / zoom} ${4 / zoom}`} />
+                          <path d={`M${radial.c.x - 5 / zoom} ${radial.c.y}h${10 / zoom}M${radial.c.x} ${radial.c.y - 5 / zoom}v${10 / zoom}`} />
+                        </g>
+                      )}
+                    </g>
+
+                    {/* screen-space overlays */}
+                    {marquee && (
+                      <rect
+                        x={Math.min(marquee.a.x, marquee.b.x) * zoom + vx}
+                        y={Math.min(marquee.a.y, marquee.b.y) * zoom + vy}
+                        width={Math.abs(marquee.b.x - marquee.a.x) * zoom}
+                        height={Math.abs(marquee.b.y - marquee.a.y) * zoom}
+                        fill="rgba(124,197,34,0.08)"
+                        stroke="#5f9c1a"
+                        strokeWidth={1}
+                        pointerEvents="none"
+                      />
+                    )}
+                    {mode === "select" && selScreen && !marquee && (
+                      <g>
+                        {sel.length > 1 && (
+                          <rect
+                            x={selScreen.a.x - 6}
+                            y={selScreen.a.y - 6}
+                            width={selScreen.b.x - selScreen.a.x + 12}
+                            height={selScreen.b.y - selScreen.a.y + 12}
+                            fill="none"
+                            stroke="#5f9c1a"
+                            strokeDasharray="4 3"
+                            pointerEvents="none"
+                          />
+                        )}
+                        <line x1={(selScreen.a.x + selScreen.b.x) / 2} y1={selScreen.a.y - 6} x2={(selScreen.a.x + selScreen.b.x) / 2} y2={selScreen.a.y - 26} stroke="#5f9c1a" pointerEvents="none" />
+                        <g data-handle="rotate" style={{ cursor: "grab" }}>
+                          <title>드래그해 회전 · Shift: 15°씩</title>
+                          <circle cx={(selScreen.a.x + selScreen.b.x) / 2} cy={selScreen.a.y - 32} r={11} fill="transparent" />
+                          <circle cx={(selScreen.a.x + selScreen.b.x) / 2} cy={selScreen.a.y - 32} r={6} fill="#fff" stroke="#5f9c1a" strokeWidth={1.5} />
+                        </g>
+                        {stretchHandle && (
+                          <g data-handle="stretch" style={{ cursor: "ns-resize" }}>
+                            <title>{stretchHandle.label}</title>
+                            <circle cx={stretchHandle.x} cy={stretchHandle.y} r={10} fill="transparent" />
+                            <rect x={stretchHandle.x - 5} y={stretchHandle.y - 5} width={10} height={10} rx={2} fill="#5f9c1a" stroke="#fff" strokeWidth={1.5} />
+                          </g>
+                        )}
+                      </g>
+                    )}
+                  </svg>
+                </div>
+
+                {/* top-left: written pattern toggle */}
+                <div className="pointer-events-none absolute inset-0 z-80">
+                  <div className="pointer-events-none absolute top-3 left-3" data-tour="written-toggle">
+                    <button
+                      type="button"
+                      aria-pressed={false}
+                      aria-label="서술도안 보기"
+                      title="서술도안 보기"
+                      onClick={() => soon("서술도안")}
+                      className={cx(sab("neutralOutline"), BTN, "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 hover:bg-bg-layer-default-pressed/80")}
+                      style={el(79, 32)}
+                    >
+                      <ScrollText className="size-3.5" />
+                      {/* layout-audit-ignore: tiny-text — reference chip label is 11px */}
+                      <span className="text-[11px] leading-none font-medium">서술도안</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* top centre: selection count / tool hints */}
+                <div className="pointer-events-none absolute inset-x-0 top-3 z-40 flex flex-col items-center gap-x1_5 px-[7.5rem]">
+                  {sel.length > 0 && (
+                    <span className="rounded-full bg-bg-neutral-inverted px-x3 py-x1 text-[12px] font-semibold text-fg-neutral-inverted shadow-s1" data-testid="selection-chip">
+                      {sel.length}개 선택
+                    </span>
+                  )}
+                  {hint && (
+                    <span className="rounded-full border border-stroke-neutral-muted bg-bg-layer-default/95 px-x3 py-x1 text-[12px] text-fg-neutral-muted shadow-s1" data-testid="canvas-hint">
+                      {hint}
+                    </span>
+                  )}
+                </div>
+
+                {/* top-right: mode */}
+                <div className="pointer-events-none absolute top-3 right-3 z-50 flex items-center gap-2">
+                  {narrow && (
+                    <button
+                      type="button"
+                      aria-label="레이어 패널"
+                      aria-pressed={rightOpen}
+                      onClick={() => (setRightOpen((v) => !v), setPaletteOpen(false))}
+                      className={cx(sab("neutralOutline"), BTN, "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 [&_svg]:size-3.5")}
+                      style={el(64, 32)}
+                    >
+                      <PanelLeft className="size-3.5 -scale-x-100" />
+                      <span className="text-[12px] leading-none font-medium">레이어</span>
+                    </button>
+                  )}
+                  <div className="pointer-events-auto">
+                    <Menu
+                      align="end"
+                      items={modeItems}
+                      trigger={({ open, toggle }) => (
+                        <button
+                          type="button"
+                          data-maker-mode={curMode.mode}
+                          aria-label={`지금 모드: ${curMode.label} · 눌러서 바꾸기`}
+                          aria-haspopup="menu"
+                          aria-expanded={open}
+                          onClick={toggle}
+                          className={cx(sab("neutralOutline"), BTN, "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 hover:bg-bg-layer-default-pressed/80 [&_svg]:size-3.5")}
+                          style={el(78, 32)}
+                        >
+                          <curMode.icon className="size-4" />
+                          {/* layout-audit-ignore: tiny-text — reference mode chip label is 11px */}
+                          <span className="text-[11px] leading-none font-medium">{curMode.label}</span>
+                          <ChevronDown className="!size-3 text-fg-neutral-muted" />
+                        </button>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                {/* repeat / number popovers (above the bottom chrome) */}
+                {(linear?.final || radial?.final) && template && (
+                  <div className="absolute bottom-[170px] left-1/2 z-[60] flex -translate-x-1/2 items-center gap-x3 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x2 pr-x2 pl-x3 shadow-s2" role="dialog" aria-label={linear ? "평면 만들기" : "원형 만들기"}>
+                    <span className="text-[13px] font-semibold whitespace-nowrap">{linear ? "평면 만들기" : "원형 만들기"}</span>
+                    <NumberField
+                      label="반복 개수"
+                      value={(linear ?? radial)!.count}
+                      min={1}
+                      max={300}
+                      onChange={(n) => (linear ? setLinear({ ...linear, count: n }) : radial && setRadial({ ...radial, count: n }))}
+                    />
+                    {radial && (
+                      <>
+                        <NumberField label="크기" value={Math.round(radial.rx)} min={2} max={4000} onChange={(r) => setRadial({ ...radial, rx: r, ry: radial.rx > 0 ? (radial.ry * r) / radial.rx : r })} />
+                        <button
+                          type="button"
+                          className="text-[12px] whitespace-nowrap text-fg-neutral-muted underline-offset-2 hover:underline"
+                          onClick={() => setRadial({ ...radial, count: radialAutoCount(radial.rx, radial.ry, template.w) })}
+                        >
+                          자동 {radialAutoCount(radial.rx, radial.ry, template.w)}개
+                        </button>
+                      </>
+                    )}
+                    <Button size="sm" onClick={() => (setLinear(null), setRadial(null))}>
+                      취소
+                    </Button>
+                    <Button size="sm" variant="primary" onClick={linear ? applyLinear : applyRadial}>
+                      만들기
+                    </Button>
+                  </div>
+                )}
+
+                {mode === "number" && (
+                  <div className="absolute bottom-[170px] left-1/2 z-[60] flex -translate-x-1/2 items-center gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x1_5 pr-x1_5 pl-x3 shadow-s2" role="group" aria-label="단 숫자">
+                    <span className="text-[13px] font-semibold whitespace-nowrap">다음 숫자</span>
+                    <IconButton label="숫자 줄이기" size="sm" disabled={numberNext <= 1} onClick={() => setNumberNext((n) => Math.max(1, n - 1))}>
+                      <Minus />
+                    </IconButton>
+                    <span className="w-6 text-center text-[15px] font-bold tabular-nums">{numberNext}</span>
+                    <IconButton label="숫자 늘리기" size="sm" onClick={() => setNumberNext((n) => n + 1)}>
+                      <Plus />
+                    </IconButton>
+                    <Button size="sm" variant="ghost" disabled={!numberStack.current.length} onClick={undoLastNumber}>
+                      직전 취소
+                    </Button>
+                    <Button size="sm" onClick={() => setMode("select")}>
+                      완료
+                    </Button>
+                  </div>
+                )}
+
+                {/* bottom: quick slots + toolbar */}
+                <div data-maker-bottom-chrome="" className="pointer-events-none absolute bottom-3 left-1/2 z-50 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-col items-center gap-2 pb-[env(safe-area-inset-bottom)]">
+                  <div className="flex flex-col items-center gap-2">
+                    <QuickSlots
+                      slots={slots}
+                      onTake={takeSlot}
+                      onEdit={(i) => (setAssignSlot(i), openPalette("symbols"))}
+                      onClear={clearSlot}
+                      onContext={(i, e) => setCtx({ x: e.clientX, y: e.clientY, slot: i })}
+                    />
+                    <Toolbar
+                      mode={mode}
+                      spaceHeld={space}
+                      onMode={setMode}
+                      onUndo={h.undo}
+                      onRedo={h.redo}
+                      canEditPath={selItems.length === 1 && selItems[0].type === "stroke"}
+                      onEditPath={() => soon("경로 편집")}
+                      canGroup={sel.length >= 2}
+                      canUngroup={selItems.some((it) => it.groupId)}
+                      onGroup={groupSel}
+                      onUngroup={ungroupSel}
+                      canRegister={sel.length > 0}
+                      onRegister={openRegister}
+                      onHelp={() => setHelpOpen(true)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* right: zoom, properties, layers */}
+              {showRight && (
+                <div className={cx("h-full shrink-0", narrow && "absolute inset-y-0 right-0 z-[90] shadow-s3")}>
+                  <RightPanel
+                    layers={doc.layers}
+                    activeLayerId={doc.activeLayerId}
+                    activeOnly={activeOnly}
+                    onActiveOnly={setActiveOnly}
+                    layer={layerActions}
+                    selected={selectedForPanel}
+                    props={propActions}
+                    savedAt={savedAt}
+                    zoom={zoom}
+                    zoomItems={zoomItems}
+                    onSoon={soon}
+                  />
+                </div>
               )}
-              <Button size="sm" onClick={() => (setLinear(null), setRadial(null))}>
-                취소
-              </Button>
-              <Button size="sm" variant="primary" onClick={linear ? applyLinear : applyRadial}>
-                만들기
-              </Button>
             </div>
-          )}
-
-          {mode === "number" && (
-            <div className="absolute bottom-[76px] left-1/2 z-10 flex -translate-x-1/2 items-center gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x1_5 pr-x1_5 pl-x3 shadow-s2" role="group" aria-label="단 숫자">
-              <span className="text-[0.8125rem] font-semibold whitespace-nowrap">다음 숫자</span>
-              <IconButton label="숫자 줄이기" size="sm" disabled={numberNext <= 1} onClick={() => setNumberNext((n) => Math.max(1, n - 1))}>
-                <Minus />
-              </IconButton>
-              <span className="w-6 text-center text-[0.9375rem] font-bold tabular-nums">{numberNext}</span>
-              <IconButton label="숫자 늘리기" size="sm" onClick={() => setNumberNext((n) => n + 1)}>
-                <Plus />
-              </IconButton>
-              <Button size="sm" variant="ghost" disabled={!numberStack.current.length} onClick={undoLastNumber}>
-                직전 취소
-              </Button>
-              <Button size="sm" onClick={() => setMode("select")}>
-                완료
-              </Button>
-            </div>
-          )}
-
-          {/* bottom toolbar */}
-          <div
-            role="toolbar"
-            aria-label="도구"
-            className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-r4 border border-stroke-neutral-muted bg-bg-layer-default p-x1 shadow-s2"
-          >
-            {TOOLS.map((t, i) =>
-              t === "sep" ? (
-                <span key={i} className="mx-x1 h-5 w-px bg-stroke-neutral-muted" />
-              ) : (
-                <IconButton key={t.mode} label={t.label} shortcut={t.key} active={mode === t.mode && !(t.mode !== "pan" && space)} onClick={() => setMode(t.mode)}>
-                  <t.icon />
-                </IconButton>
-              ),
-            )}
-            {mode === "select" && sel.length > 0 && (
-              <>
-                <span className="mx-x1 h-5 w-px bg-stroke-neutral-muted" />
-                <IconButton label="왼쪽 회전" shortcut="⇧R" onClick={() => rotateSel(-15)}>
-                  <RotateCcw />
-                </IconButton>
-                <IconButton label="오른쪽 회전" shortcut="R" onClick={() => rotateSel(15)}>
-                  <RotateCw />
-                </IconButton>
-                <IconButton label="좌우 반전" shortcut="⇧H" onClick={() => flipSel("h")}>
-                  <FlipH />
-                </IconButton>
-                <IconButton label="상하 반전" shortcut="⇧V" onClick={() => flipSel("v")}>
-                  <FlipV />
-                </IconButton>
-                <IconButton label="삭제하기" shortcut="Del" onClick={deleteSel} className="hover:text-fg-critical">
-                  <Trash />
-                </IconButton>
-              </>
-            )}
-            <span className="mx-x1 h-5 w-px bg-stroke-neutral-muted" />
-            <IconButton label={doc.showGrid ? "격자 숨기기" : "격자 표시"} shortcut="G" active={false} onClick={() => h.set((d) => ({ ...d, showGrid: !d.showGrid }))} className={cx(!doc.showGrid && "text-fg-neutral-subtle")}>
-              <Dots />
-            </IconButton>
-          </div>
-
-          {/* zoom */}
-          <div className="absolute right-4 bottom-4 flex items-center gap-0.5 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default p-x1 shadow-s2" role="group" aria-label="확대·축소">
-            <IconButton label="축소" shortcut="⌘−" size="sm" onClick={() => zoomCenter(0.8)}>
-              <Minus />
-            </IconButton>
-            <button
-              type="button"
-              aria-label="배율 100%로"
-              title="100%로 보기"
-              onClick={() => zoomCenter(1 / zoom)}
-              className="h-8 w-12 rounded-r2 text-[0.75rem] font-semibold text-fg-neutral tabular-nums hover:bg-bg-layer-fill"
-              data-testid="zoom-level"
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <IconButton label="확대" shortcut="⌘+" size="sm" onClick={() => zoomCenter(1.25)}>
-              <Plus />
-            </IconButton>
-            <IconButton label="화면에 맞추기" shortcut="⌘0" size="sm" onClick={fitAll} className="[&>[role=tooltip]]:right-0 [&>[role=tooltip]]:left-auto [&>[role=tooltip]]:translate-x-0">
-              <Fit />
-            </IconButton>
           </div>
         </div>
-
-        {/* right: layers + properties */}
-        {showRight && (
-          <aside
-            aria-label="레이어와 속성"
-            className={cx(
-              "z-20 flex w-[248px] shrink-0 flex-col border-l border-stroke-neutral-muted bg-bg-layer-default",
-              narrow && "absolute inset-y-0 right-0 shadow-s3",
-            )}
-          >
-            {narrow && (
-              <div className="flex justify-end px-x2 pt-x2">
-                <IconButton label="닫기" size="sm" onClick={() => setRightOpen(false)}>
-                  <X />
-                </IconButton>
-              </div>
-            )}
-            <RightPanel
-              layers={doc.layers}
-              activeLayerId={doc.activeLayerId}
-              activeOnly={activeOnly}
-              onActiveOnly={setActiveOnly}
-              layer={layerActions}
-              selected={selectedForPanel}
-              props={propActions}
-            />
-          </aside>
-        )}
       </div>
 
       <CtxMenu at={ctx} items={ctxItems} onClose={closeCtx} />
+
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={onExport} />
+      <ShortcutDialog open={helpOpen} onClose={() => setHelpOpen(false)} groups={SHORTCUTS} />
 
       <Dialog
         open={registerOpen}
@@ -1747,7 +1829,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
           </>
         }
       >
-        <p className="mb-x3 text-[0.8125rem] text-fg-neutral-muted">선택한 {sel.length}개를 하나의 기호로 저장해요. 다른 도안에서도 같이 쓸 수 있어요.</p>
+        <p className="mb-x3 text-[13px] text-fg-neutral-muted">선택한 {sel.length}개를 하나의 기호로 저장해요. 다른 도안에서도 같이 쓸 수 있어요.</p>
         <input
           autoFocus
           aria-label="기호 이름"
@@ -1755,7 +1837,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
           value={registerName}
           onChange={(e) => setRegisterName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && confirmRegister()}
-          className="h-10 w-full rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x3 text-[0.9375rem] outline-none focus:border-stroke-neutral-contrast"
+          className="h-10 w-full rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x3 text-[15px] outline-none focus:border-stroke-neutral-contrast"
         />
       </Dialog>
 
@@ -1780,8 +1862,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
           </>
         }
       >
-        <p className="text-[0.875rem] text-fg-neutral-muted">이 기호를 라이브러리에서 삭제할까요? 이미 도안에 놓은 기호는 그대로 남아요.</p>
+        <p className="text-[14px] text-fg-neutral-muted">이 기호를 라이브러리에서 삭제할까요? 이미 도안에 놓은 기호는 그대로 남아요.</p>
       </Dialog>
-    </EditorShell>
+    </div>
   );
 }
