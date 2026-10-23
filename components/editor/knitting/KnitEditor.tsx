@@ -1,17 +1,49 @@
 "use client";
 
+import "./knit.css";
+import Link from "next/link";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { EditorShell, openShortcutHelp, type ShortcutGroup } from "@/components/app/EditorShell";
-import { Brush, Eraser, Fit, Grid, GridEdit, Hand, Lasso, Layers, Pencil, Pipette, Plus, Pointer, X, ZoomIn, ZoomOut } from "@/components/app/icons";
-import { Button, ContextMenu, Dialog, IconButton, cx, isMod, useHotkeys, useToast, type MenuItem } from "@/components/app/ui";
+import { ContextMenu, Dialog, Button, Menu, cx, isMod, useHotkeys, useToast, type MenuItem } from "@/components/app/ui";
 import { exportSvg, safeName, svgThumbnail } from "@/lib/export";
 import { uid } from "@/lib/id";
-import { knitSymbol, symbolDefs } from "@/lib/symbols/knitting";
-import { CRAFT_LABEL, type KnitData, type View, type Work } from "@/lib/types";
-import { useAutosave } from "@/lib/useAutosave";
+import { works } from "@/lib/store";
+import { BLANK_ID, ERASE_ID, canonicalSymbol, knitSymbol, symbolDefs } from "@/lib/symbols/knitting";
+import type { KnitData, View, Work } from "@/lib/types";
 import { useHistory } from "@/lib/useHistory";
+import { AB_TAIL, ab, seedSize } from "./ab";
+import { useKnitAutosave } from "./autosave";
+import { ExportDialog, ShortcutDialog, type ShortcutGroup } from "./Dialogs";
+import {
+  BookmarkPlus,
+  Box,
+  ChevronDown,
+  CircleHelp,
+  Download,
+  Eraser,
+  FileUp,
+  Footprints,
+  Grid3x3,
+  Hand,
+  Lasso,
+  LibraryBig,
+  MousePointer2,
+  Paintbrush,
+  Pencil,
+  Pipette,
+  Plus,
+  Redo2,
+  Rotate3d,
+  Scaling,
+  ScrollText,
+  Shapes,
+  Sparkle,
+  Undo2,
+  X,
+} from "./icons";
+import { LESSONS, LessonPicker, LessonTour, type LessonId, type LessonProgress } from "./Lesson";
 import {
   BIG_GRID,
+  DEFAULT_NUMBERING,
   cellLine,
   clamp,
   clearRect,
@@ -31,6 +63,7 @@ import {
   rectW,
   resizeGrid,
   rotateBlockCW,
+  rowOwners,
   symbolAt,
   tileBlock,
   writeBlock,
@@ -38,12 +71,14 @@ import {
   type Geo,
   type KDoc,
   type KGrid,
-  type Numbering,
   type Rect,
   type Sel,
 } from "./model";
-import { LeftPanel, RightPanel, type LeftTab, type MyPattern, type Stamp } from "./Panels";
-import { buildSvg, buildThumb, drawGridCanvas, gridBody, numberMarkup } from "./render";
+import { PALETTE_W, Palette, type LeftTab, type MyPattern, type Stamp } from "./Palette";
+import { RightPanel, hexA } from "./RightPanel";
+import { LINE_ACTIVE, buildSvg, buildThumb, drawGridCanvas, gridLines, numFont, numberLabels } from "./render";
+
+/* layout-audit-ignore: tiny-text — editor chrome reproduces the reference's 10–11px chips and labels */
 
 type Mode = "select" | "edit" | "pan" | "grid" | "gridEdit" | "brush";
 type Pt = { x: number; y: number };
@@ -65,7 +100,12 @@ type Drag =
 
 const MY_KEY = "pt:knit:myPatterns";
 const CLIP_KEY = "pt:knit:clipboard";
+const LESSON_SEEN = (id: string) => `pt:knit:lessons-seen:${id}`;
 const MY_MAX = 60;
+/** canvas margins used when framing grids (matches the reference fit: 48px sides, 66px bottom chrome) */
+const FIT_PAD = 48;
+const BOTTOM_CHROME = 66;
+const FIT_MAX = 1.2;
 
 const readMine = (): MyPattern[] => {
   try {
@@ -76,12 +116,20 @@ const readMine = (): MyPattern[] => {
   }
 };
 
-function normalize(d: KnitData): KDoc {
+function normalize(d: KnitData & Partial<KDoc>): KDoc {
   return {
-    grids: (d.grids ?? []).map((g) => ({ ...g, cells: g.cells.length === g.cols * g.rows ? g.cells : Array(g.cols * g.rows).fill(null) })),
+    grids: (d.grids ?? []).map((g) => ({
+      ...g,
+      cells:
+        g.cells.length === g.cols * g.rows
+          ? g.cells.map((c) => (c?.symbol && canonicalSymbol(c.symbol) !== c.symbol ? { ...c, symbol: canonicalSymbol(c.symbol) } : c))
+          : Array(g.cols * g.rows).fill(null),
+    })),
     activeGridId: d.activeGridId ?? null,
     colors: d.colors?.length ? d.colors : ["#24365c", "#efe7d6", "#c47a5c"],
     gauge: d.gauge ?? { sts: 22, rows: 30 },
+    gaugeOn: d.gaugeOn ?? false,
+    bg: d.bg,
     view: d.view ?? { x: 0, y: 0, zoom: 1 },
   };
 }
@@ -91,11 +139,12 @@ const SHORTCUTS: ShortcutGroup[] = [
     title: "도구",
     items: [
       { keys: "V", label: "선택" },
-      { keys: "E", label: "편집" },
+      { keys: "E", label: "삽입 (기호 놓기)" },
       { keys: "H", label: "이동" },
       { keys: "K", label: "격자 만들기" },
       { keys: "G", label: "격자 편집" },
       { keys: "B", label: "칸 색칠" },
+      { keys: "M", label: "내 무늬로 등록" },
       { keys: "Esc", label: "선택 해제 / 취소" },
     ],
   },
@@ -108,6 +157,7 @@ const SHORTCUTS: ShortcutGroup[] = [
       { keys: "드래그", label: "선택한 칸 옮기기" },
       { keys: "Ctrl(Cmd) + 드래그", label: "선택한 칸 복사" },
       { keys: "핸들 드래그", label: "그 방향으로 무늬 반복" },
+      { keys: "테두리 드래그", label: "격자 옮기기" },
     ],
   },
   {
@@ -136,130 +186,341 @@ const SHORTCUTS: ShortcutGroup[] = [
   },
 ];
 
-// ---------------- grid layer (memoised per grid object) ----------------
+const MODE_INFO: Record<Mode, { label: string; key?: string; icon: (c?: string) => ReactNode }> = {
+  select: { label: "선택", key: "V", icon: (c) => <MousePointer2 className={c} /> },
+  edit: { label: "삽입", key: "E", icon: (c) => <Pencil className={c} /> },
+  pan: { label: "이동", key: "H", icon: (c) => <Hand className={c} /> },
+  grid: { label: "격자 만들기", key: "K", icon: (c) => <Grid3x3 className={c} /> },
+  gridEdit: { label: "격자 편집", key: "G", icon: (c) => <Scaling className={c} /> },
+  brush: { label: "칸 색칠", key: "B", icon: (c) => <Paintbrush className={c} /> },
+};
 
-const GridLayer = memo(function GridLayer({ grid, geo }: { grid: KGrid; geo: Geo }) {
+// ---------------- grid view (memoised per grid object) ----------------
+
+const GridView = memo(function GridView({ grid, geo, active, bg }: { grid: KGrid; geo: Geo; active: boolean; bg: string }) {
   const big = grid.cols * grid.rows > BIG_GRID;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const cv = canvasRef.current;
     if (!big || !cv) return;
     let alive = true;
-    drawGridCanvas(cv, grid, geo, () => alive).catch(() => {});
+    drawGridCanvas(cv, grid, geo, () => alive, active ? LINE_ACTIVE : undefined).catch(() => {});
     return () => {
       alive = false;
     };
-  }, [big, grid, geo]);
-  const markup = useMemo(() => (big ? numberMarkup(grid, geo) : gridBody(grid, geo) + numberMarkup(grid, geo)), [big, grid, geo]);
+  }, [big, grid, geo, active]);
   const W = grid.cols * geo.cw;
   const H = grid.rows * geo.ch;
+  const lines = useMemo(() => (big ? [] : gridLines(grid, geo, active)), [big, grid, geo, active]);
+  const labels = useMemo(() => numberLabels(grid, geo), [grid, geo]);
+  const cells = useMemo(() => (big ? null : cellsMarkup(grid, geo)), [big, grid, geo]);
+  const fs = numFont(geo);
   return (
-    <g transform={`translate(${grid.x} ${grid.y})`}>
-      {big && (
-        // very large charts: cells are painted on a canvas layer instead of thousands of SVG nodes
-        <foreignObject x={0} y={0} width={W} height={H} pointerEvents="none">
-          <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", background: "#fff" }} />
-        </foreignObject>
+    <div className="absolute" aria-label="격자" style={{ width: W, height: H, left: grid.x, top: grid.y }}>
+      {big ? (
+        <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute" style={{ left: 0, top: 0, width: W, height: H }} />
+      ) : (
+        <svg aria-hidden="true" className="pointer-events-none absolute top-0 left-0" width={W} height={H} style={{ background: bg }}>
+          <g color="#222" dangerouslySetInnerHTML={{ __html: cells! }} />
+        </svg>
       )}
-      <g dangerouslySetInnerHTML={{ __html: markup }} />
-    </g>
+      {!big && (
+        <svg
+          aria-hidden="true"
+          className={cx("pointer-events-none absolute top-0 left-0 z-2 overflow-visible", active ? "text-amber-500" : "text-neutral-400")}
+          width={W}
+          height={H}
+          shapeRendering="crispEdges"
+        >
+          {lines.map((l, i) => (
+            <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke="currentColor" strokeWidth={l.w} strokeLinecap="butt" strokeLinejoin="miter" />
+          ))}
+        </svg>
+      )}
+      {labels.map((l, i) => (
+        <div
+          key={i}
+          className="pointer-events-none absolute z-[5] flex items-center justify-center text-fg-neutral-muted/80 tabular-nums select-none"
+          style={{ left: l.x, top: l.y, width: l.w, height: l.h, fontSize: fs }}
+        >
+          {l.text}
+        </div>
+      ))}
+    </div>
   );
 });
 
-// ---------------- small UI bits ----------------
+/** colour fills + symbols of a grid (no lines; the line layer sits on top) */
+function cellsMarkup(g: KGrid, geo: Geo) {
+  const f = (n: number) => Math.round(n * 100) / 100;
+  let s = "";
+  for (let r = 0; r < g.rows; r++) {
+    let c = 0;
+    while (c < g.cols) {
+      const col = g.cells[r * g.cols + c]?.color;
+      if (!col) {
+        c++;
+        continue;
+      }
+      let e = c + 1;
+      while (e < g.cols && g.cells[r * g.cols + e]?.color === col) e++;
+      s += `<rect x="${f(c * geo.cw)}" y="${f(r * geo.ch)}" width="${f((e - c) * geo.cw)}" height="${f(geo.ch)}" fill="${col}"/>`;
+      c = e;
+    }
+  }
+  for (let r = 0; r < g.rows; r++) {
+    const owners = rowOwners(g, r);
+    for (let c = 0; c < g.cols; c++) {
+      if (owners[c] !== c) continue;
+      const cell = g.cells[r * g.cols + c]!;
+      const sym = knitSymbol(cell.symbol);
+      if (!sym) continue;
+      const dark = cell.color && lightLow(cell.color);
+      s += `<use href="#ks-${sym.id}" x="${f(c * geo.cw)}" y="${f(r * geo.ch)}" width="${f(sym.width * geo.cw)}" height="${f(geo.ch)}"${dark ? ' color="#fff"' : ""}/>`;
+    }
+  }
+  return s;
+}
+const lightLow = (hex: string) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255 < 0.45;
+};
 
-function Sep() {
-  return <span aria-hidden className="mx-x1 h-6 w-px bg-stroke-neutral-muted" />;
+function Divider({ className }: { className?: string }) {
+  return <div className={cx("mx-x0_5 h-6 w-px bg-stroke-neutral-muted", className)} />;
 }
 
-function Floating({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cx("rounded-r4 border border-stroke-neutral-muted bg-bg-layer-default shadow-s2", className)}>{children}</div>;
+function ToolBtn({
+  label,
+  active,
+  disabled,
+  onClick,
+  children,
+  tour,
+  className,
+  pressed,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+  tour?: string;
+  className?: string;
+  pressed?: boolean;
+}) {
+  return (
+    <button
+      className={cx(ab(active ? "brandSolid" : "ghost"), AB_TAIL, "w-x8 px-0", className)}
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+      data-tour={tour}
+      disabled={disabled}
+      data-disabled={disabled ? "" : undefined}
+      tabIndex={disabled ? -1 : undefined}
+      onClick={onClick}
+      style={seedSize(32, 32)}
+    >
+      {children}
+    </button>
+  );
 }
 
-function useWide() {
-  const [wide, setWide] = useState(true);
-  useEffect(() => {
-    const m = window.matchMedia("(min-width: 1024px)");
-    const on = () => setWide(m.matches);
-    on();
-    m.addEventListener("change", on);
-    return () => m.removeEventListener("change", on);
-  }, []);
-  return wide;
+// ---------------- root: real document ↔ lesson practice docs ----------------
+
+const isFresh = (w: Work) => w.createdAt === w.updatedAt && !(w.data as KnitData).grids?.length;
+
+function practiceData(lesson: LessonId): KDoc {
+  const g = newGrid("격자 1", -168.333, -111.667, 12, 8);
+  g.x = -168.333;
+  g.y = -111.667;
+  const base: KDoc = { grids: lesson === "grid" ? [] : [g], activeGridId: lesson === "grid" ? null : g.id, colors: ["#fecaca", "#24365c", "#efe7d6", "#c47a5c", "#6d9c1c", "#5d8aa1"], gauge: { sts: 22, rows: 30 }, gaugeOn: false, view: { x: 424, y: 450, zoom: 1.2 } };
+  return base;
+}
+
+export default function KnitEditor({ work, data }: { work: Work; data: KnitData }) {
+  const [lesson, setLesson] = useState<{ id: LessonId; n: number } | null>(null);
+  const [gen, setGen] = useState(0);
+  const fresh = useMemo(() => isFresh(work), [work]);
+  const [picker, setPicker] = useState(() => {
+    if (!fresh) return false;
+    try {
+      return !localStorage.getItem(LESSON_SEEN(work.id));
+    } catch {
+      return false;
+    }
+  });
+  const markSeen = () => {
+    try {
+      localStorage.setItem(LESSON_SEEN(work.id), "1");
+    } catch {
+      /* ignore */
+    }
+  };
+  // after a lesson the real document is read back from storage (it was saved on the way out)
+  const current = useMemo(() => {
+    if (!gen) return { work, data };
+    const w = works.get(work.id);
+    return w ? { work: w, data: w.data as KnitData } : { work, data };
+  }, [gen, work, data]);
+
+  if (lesson)
+    return (
+      <Editor
+        key={`lesson-${lesson.id}-${lesson.n}`}
+        work={{ ...work, title: "연습용 도안" }}
+        data={practiceData(lesson.id) as KnitData}
+        practice={lesson.id}
+        seed={false}
+        onLessons={() => setPicker(true)}
+        onExitPractice={() => {
+          setLesson(null);
+          setGen((g) => g + 1);
+        }}
+        overlay={null}
+      />
+    );
+
+  return (
+    <Editor
+      key={`doc-${gen}`}
+      work={current.work}
+      data={current.data}
+      seed={fresh && gen === 0}
+      onLessons={() => setPicker(true)}
+      overlay={
+        picker ? (
+          <LessonPicker
+            onPick={(id) => {
+              markSeen();
+              setPicker(false);
+              setLesson({ id, n: Date.now() });
+            }}
+            onLater={() => {
+              markSeen();
+              setPicker(false);
+            }}
+          />
+        ) : null
+      }
+    />
+  );
 }
 
 // ---------------- editor ----------------
 
-export default function KnitEditor({ work, data }: { work: Work; data: KnitData }) {
-  const initial = useMemo(() => normalize(data), [data]);
+type EditorProps = {
+  work: Work;
+  data: KnitData;
+  /** brand-new document: start with a 20 × 20 grid */
+  seed: boolean;
+  practice?: LessonId;
+  onExitPractice?: () => void;
+  onLessons: () => void;
+  overlay: ReactNode;
+};
+
+function Editor({ work, data, seed, practice, onExitPractice, onLessons, overlay }: EditorProps) {
+  const initial = useMemo(() => {
+    const d = normalize(data);
+    if (seed && !d.grids.length) {
+      // a new document starts with one 20 × 20 board (placed where the reference editor puts it)
+      const g = newGrid("격자 1", 0, 0, 20, 20);
+      d.grids = [{ ...g, x: 147.606, y: 83.6436 }];
+    }
+    return d;
+  }, [data, seed]);
   const h = useHistory<KDoc>(initial);
   const doc = h.state;
   const toast = useToast();
-  const wide = useWide();
+  const soon = () => toast("준비 중이에요");
 
   const [view, setView] = useState<View>(initial.view);
   const viewRef = useRef(view);
   viewRef.current = view;
-  const [activeId, setActiveId] = useState<string | null>(initial.activeGridId ?? initial.grids[0]?.id ?? null);
-  const [mode, setMode] = useState<Mode>("select");
+  // While the view is moving the content layer is composited (will-change) so pans and zooms stay smooth;
+  // once it settles the hint is dropped so the chart re-rasters crisply at the new scale.
+  const [viewLive, setViewLive] = useState<"initial" | "moving" | "idle">("initial");
+  const liveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchView = useCallback(() => {
+    setViewLive("moving");
+    if (liveTimer.current) clearTimeout(liveTimer.current);
+    liveTimer.current = setTimeout(() => setViewLive("idle"), 300);
+  }, []);
+  const [activeId, setActiveId] = useState<string | null>(seed ? null : (initial.activeGridId ?? initial.grids[0]?.id ?? null));
+  const [mode, setMode] = useState<Mode>(practice === "gridEdit" ? "gridEdit" : practice === "grid" ? "grid" : practice === "modes" ? "brush" : "select");
   const [pick, setPick] = useState<string | null>(null);
   const [stamp, setStamp] = useState<Stamp | null>(null);
   const [tab, setTab] = useState<LeftTab>("symbols");
+  const [paletteOpen, setPaletteOpen] = useState(true);
+  const [paletteW, setPaletteW] = useState(PALETTE_W);
   const [sel, setSel] = useState<Sel | null>(null);
   const [hover, setHover] = useState<{ gridId: string; c: number; r: number } | null>(null);
+  const [bandHover, setBandHover] = useState<string | null>(null);
   const [brushColor, setBrushColor] = useState<string | null>(initial.colors[0] ?? "#24365c");
   const [brushTool, setBrushTool] = useState<"paint" | "eyedropper" | "lasso">("paint");
   const [space, setSpace] = useState(false);
   const [preview, setPreview] = useState<{ create?: { x: number; y: number; w: number; h: number; cols: number; rows: number }; lasso?: Pt[]; resize?: string } | null>(null);
-  const [gridPop, setGridPop] = useState({ cols: 30, rows: 24 });
+  const [gridPop, setGridPop] = useState({ cols: 20, rows: 20 });
   const [mine, setMine] = useState<MyPattern[]>([]);
   const [saveMineOpen, setSaveMineOpen] = useState<Block | null>(null);
   const [mineName, setMineName] = useState("");
   const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
-  const [size, setSize] = useState({ w: 800, h: 600 });
+  const [exportOpen, setExportOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [written, setWritten] = useState(false);
+  const [pillOpen, setPillOpen] = useState(true);
+  const [tracker, setTracker] = useState<{ on: boolean; row: number }>({ on: false, row: 1 });
+  const [title, setTitle] = useState(work.title);
+  const [step, setStep] = useState(0);
+  const [prog, setProg] = useState<LessonProgress>({ gridsCreated: 0, picked: false, placed: 0, resized: 0, carved: 0, mode: "", painted: 0, glyphOpened: false });
+  const bump = (k: "gridsCreated" | "placed" | "resized" | "carved" | "painted") => practice && setProg((p) => ({ ...p, [k]: p[k] + 1 }));
 
   const wrapRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const clip = useRef<Block | null>(null);
 
-  const geo = useMemo(() => geoOf(doc.gauge), [doc.gauge]);
+  const geo = useMemo(() => geoOf(doc), [doc]);
   const geoRef = useRef(geo);
   geoRef.current = geo;
   const active = doc.grids.find((g) => g.id === activeId) ?? null;
   const visibleGrids = doc.grids.filter((g) => g.visible);
 
   useEffect(() => setMine(readMine()), []);
+  useEffect(() => {
+    if (practice) setProg((p) => (p.mode === mode ? p : { ...p, mode }));
+  }, [mode, practice]);
 
   // ---------- persistence ----------
-  const saveData = useMemo<KnitData>(() => ({ ...doc, activeGridId: activeId, view }), [doc, activeId, view]);
-  const status = useAutosave(work.id, saveData, () => {
-    const s = buildThumb(h.get(), geoOf(h.get().gauge));
-    return s ? svgThumbnail(s) : undefined;
+  const saveData = useMemo<KnitData>(() => ({ ...doc, activeGridId: activeId, view }) as KnitData, [doc, activeId, view]);
+  const save = useKnitAutosave(work.id, saveData, {
+    enabled: !practice,
+    initialSavedAt: seed ? null : work.updatedAt,
+    thumb: () => {
+      const s = buildThumb(h.get(), geoOf(h.get()));
+      return s ? svgThumbnail(s) : undefined;
+    },
   });
+  const rename = (t: string) => {
+    setTitle(t);
+    if (!practice) works.update(work.id, { title: t, updatedAt: Date.now() });
+  };
 
   // ---------- view helpers ----------
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
-
   const fit = useCallback(
     (grids?: KGrid[]) => {
       const el = wrapRef.current;
       const b = gridBounds((grids ?? h.get().grids).filter((g) => g.visible), geoRef.current);
       if (!el || !b) return;
       const W = el.clientWidth;
-      const H = el.clientHeight;
-      const pad = 72;
-      const zoom = clamp(Math.min((W - pad * 2) / (b.x1 - b.x0 + 60), (H - pad * 2 - 40) / (b.y1 - b.y0 + 50)), 0.1, 3);
-      setView({ zoom, x: W / 2 - ((b.x0 + b.x1) / 2) * zoom, y: (H - 40) / 2 - ((b.y0 + b.y1) / 2) * zoom });
+      const H = el.clientHeight - BOTTOM_CHROME;
+      const zoom = clamp(Math.min((W - FIT_PAD * 2) / (b.x1 - b.x0), (H - FIT_PAD * 2) / (b.y1 - b.y0)), 0.1, FIT_MAX);
+      setView({ zoom, x: W / 2 - ((b.x0 + b.x1) / 2) * zoom, y: H / 2 - ((b.y0 + b.y1) / 2) * zoom });
     },
     [h],
   );
@@ -270,23 +531,24 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     if (framed.current) return;
     framed.current = true;
     const v = initial.view;
-    if (initial.grids.length && v.x === 0 && v.y === 0 && v.zoom === 1) requestAnimationFrame(() => fit(initial.grids));
-  }, [fit, initial]);
+    if (!practice && initial.grids.length && v.x === 0 && v.y === 0 && v.zoom === 1) fit(initial.grids);
+  }, [fit, initial, practice]);
 
   const zoomAt = useCallback((factor: number, sx?: number, sy?: number) => {
-    const el = wrapRef.current;
+    const el = surfaceRef.current;
     if (!el) return;
     const v = viewRef.current;
     const px = sx ?? el.clientWidth / 2;
     const py = sy ?? el.clientHeight / 2;
     const zoom = clamp(v.zoom * factor, 0.1, 8);
+    touchView();
     const wx = (px - v.x) / v.zoom;
     const wy = (py - v.y) / v.zoom;
     setView({ zoom, x: px - wx * zoom, y: py - wy * zoom });
-  }, []);
+  }, [touchView]);
 
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = surfaceRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -297,17 +559,21 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         const k = e.deltaMode === 1 ? 16 : 1;
         const dx = (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX) * k;
         const dy = (e.shiftKey && !e.deltaX ? 0 : e.deltaY) * k;
+        touchView();
         setView((v) => ({ ...v, x: v.x - dx, y: v.y - dy }));
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [zoomAt]);
+  }, [zoomAt, touchView]);
 
+  // the content layer sits on whole pixels so 1px grid lines stay crisp
+  const tx = Math.round(view.x);
+  const ty = Math.round(view.y);
   const toWorld = (e: { clientX: number; clientY: number }): Pt => {
-    const r = svgRef.current!.getBoundingClientRect();
+    const r = surfaceRef.current!.getBoundingClientRect();
     const v = viewRef.current;
-    return { x: (e.clientX - r.left - v.x) / v.zoom, y: (e.clientY - r.top - v.y) / v.zoom };
+    return { x: (e.clientX - r.left - Math.round(v.x)) / v.zoom, y: (e.clientY - r.top - Math.round(v.y)) / v.zoom };
   };
   const cellOf = (g: KGrid, p: Pt): Cell => ({ c: Math.floor((p.x - g.x) / geo.cw), r: Math.floor((p.y - g.y) / geo.ch) });
   const inGrid = (g: KGrid, c: Cell) => c.c >= 0 && c.r >= 0 && c.c < g.cols && c.r < g.rows;
@@ -319,6 +585,21 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       if (!g.visible) continue;
       const c = cellOf(g, p);
       if (inGrid(g, c)) return { g, ...c };
+    }
+    return null;
+  };
+  /** the band just outside a grid's border: drag it to move the grid */
+  const hitBand = (p: Pt) => {
+    const gs = h.get().grids;
+    const t = 8 / viewRef.current.zoom;
+    for (let i = gs.length - 1; i >= 0; i--) {
+      const g = gs[i];
+      if (!g.visible) continue;
+      const W = g.cols * geo.cw;
+      const H = g.rows * geo.ch;
+      const inOuter = p.x >= g.x - t && p.x <= g.x + W + t && p.y >= g.y - t && p.y <= g.y + H + t;
+      const inInner = p.x > g.x && p.x < g.x + W && p.y > g.y && p.y < g.y + H;
+      if (inOuter && !inInner) return g;
     }
     return null;
   };
@@ -338,12 +619,13 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
   const editGrid = (id: string, fn: (g: KGrid) => KGrid | null) => h.set((d) => mapGrid(d, id, fn));
   /** applies a drag step: first change records the undo point, the rest merge into it */
   const commit = (next: KDoc, d: { cp: boolean }) => {
-    if (next === h.get()) return;
+    if (next === h.get()) return false;
     if (!d.cp) {
       h.checkpoint();
       d.cp = true;
     }
     h.set(next, { merge: true });
+    return true;
   };
 
   const addGrid = (cols: number, rows: number, at?: Pt, block?: Block, name?: string) => {
@@ -354,23 +636,26 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       y = at.y;
     } else {
       const b = gridBounds(h.get().grids, geo);
+      const el = surfaceRef.current;
       if (b) {
-        x = b.x1 + geo.cw * 4;
+        x = b.x1 + geo.cw * 3;
         y = b.y0;
       } else {
         const v = viewRef.current;
-        x = (size.w / 2 - v.x) / v.zoom - (cols * geo.cw) / 2;
-        y = (size.h / 2 - 30 - v.y) / v.zoom - (rows * geo.ch) / 2;
+        const W = el?.clientWidth ?? 800;
+        const H = (el?.clientHeight ?? 600) - BOTTOM_CHROME;
+        x = (W / 2 - v.x) / v.zoom - (cols * geo.cw) / 2;
+        y = (H / 2 - v.y) / v.zoom - (rows * geo.ch) / 2;
       }
     }
-    let g = newGrid(name ?? nextGridName(h.get().grids), x, y, cols, rows);
+    let g: KGrid = { ...newGrid(name ?? nextGridName(h.get().grids), x, y, cols, rows), numbering: DEFAULT_NUMBERING };
     if (block) g = tileBlock(g, block, { c0: 0, r0: 0, c1: cols - 1, r1: rows - 1 }, { c: cols % block.cols ? cols - block.cols * Math.ceil(cols / block.cols) : 0, r: 0 });
     h.set((d) => ({ ...d, grids: [...d.grids, g] }));
     setActiveId(g.id);
     setSel(null);
+    bump("gridsCreated");
     if (!at) {
-      // bring a new grid into view
-      const el = wrapRef.current;
+      const el = surfaceRef.current;
       if (el) {
         const v = viewRef.current;
         const sx = g.x * v.zoom + v.x;
@@ -382,7 +667,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
   };
 
   // ---------- selection ops ----------
-  const selGrid = sel ? doc.grids.find((g) => g.id === sel.gridId) ?? null : null;
+  const selGrid = sel ? (doc.grids.find((g) => g.id === sel.gridId) ?? null) : null;
 
   const transformSel = (fn: (b: Block) => Block) => {
     if (!sel || !selGrid) return;
@@ -483,6 +768,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     setMine(list);
     setSaveMineOpen(null);
     setTab("mine");
+    setPaletteOpen(true);
     toast(`「${name}」을(를) 내 무늬에 등록했어요`);
   };
   const deleteMine = (id: string) => {
@@ -525,15 +811,27 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     h.set((d) => ({ ...d, grids: d.grids.filter((g) => g.id !== id) }));
     if (sel?.gridId === id) setSel(null);
     if (activeId === id) {
-      const rest = doc.grids.filter((g) => g.id !== id);
-      setActiveId(rest[rest.length - 1]?.id ?? null);
+      setActiveId(null);
+      if (mode === "gridEdit") setMode("select");
     }
   };
-  const setNumbering = (n: Numbering) => active && editGrid(active.id, (g) => ({ ...g, numbering: n }));
+  const clearRows = (odd: boolean) => {
+    if (!active) return;
+    editGrid(active.id, (g) => {
+      const cells = g.cells.slice();
+      const rev = (g.numbering ?? DEFAULT_NUMBERING).reverseRows !== false;
+      for (let r = 0; r < g.rows; r++) {
+        const num = rev ? g.rows - r : r + 1;
+        if (num % 2 === (odd ? 1 : 0)) for (let c = 0; c < g.cols; c++) cells[r * g.cols + c] = null;
+      }
+      return { ...g, cells };
+    });
+    toast(odd ? "홀수단을 비웠어요" : "짝수단을 비웠어요");
+  };
 
   const switchMode = (m: Mode) => {
     if (m === "gridEdit" && !active) {
-      toast("격자를 먼저 만들어 주세요. 격자 도구(K)로 드래그하면 만들 수 있어요");
+      toast("선택 모드에서 격자를 먼저 골라 주세요");
       return;
     }
     if (m === "edit" && !doc.grids.length) toast("격자를 먼저 만들어 주세요. 격자 도구(K)로 드래그하면 만들 수 있어요");
@@ -543,19 +841,18 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
   };
 
   // ---------- pointer ----------
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button === 2) return;
     setCtx(null);
     const p = toWorld(e);
     const target = e.target as Element;
-    (e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId);
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
     if (e.button === 1 || mode === "pan" || space) {
       const v = viewRef.current;
       drag.current = { kind: "pan", sx: e.clientX, sy: e.clientY, vx: v.x, vy: v.y };
       return;
     }
     const hit = hitGrid(p);
-    const labelId = target.closest("[data-grid-label]")?.getAttribute("data-grid-label");
 
     if (mode === "grid") {
       drag.current = { kind: "create", start: p, cur: p, moved: false };
@@ -569,10 +866,10 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         drag.current = { kind: "fill", snap: selGrid, gridId: selGrid.id, rect: { ...sel }, block: readBlock(selGrid, sel), hx, hy, key: "", cp: false };
         return;
       }
-      if (labelId) {
-        const g = doc.grids.find((x) => x.id === labelId)!;
-        setActiveId(g.id);
-        drag.current = { kind: "gridMove", gridId: g.id, gx: g.x, gy: g.y, start: p, cp: false };
+      const band = !hit ? hitBand(p) : null;
+      if (band) {
+        setActiveId(band.id);
+        drag.current = { kind: "gridMove", gridId: band.id, gx: band.x, gy: band.y, start: p, cp: false };
         return;
       }
       if (hit && sel && sel.gridId === hit.g.id && hit.c >= sel.c0 && hit.c <= sel.c1 && hit.r >= sel.r0 && hit.r <= sel.r1) {
@@ -598,6 +895,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         return;
       }
       setSel(null);
+      setActiveId(null);
       return;
     }
 
@@ -624,7 +922,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         gridId: hit.g.id,
         last: { c: hit.c, r: hit.r },
         start: { c: hit.c, r: hit.r },
-        erase: !!ex && ex.id === pick,
+        erase: pick === ERASE_ID || (!!ex && ex.id === pick),
         sym: pick,
         cp: false,
         warned: false,
@@ -652,7 +950,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       }
       const d: Drag = { kind: "paint", gridId: hit.g.id, last: { c: hit.c, r: hit.r }, color: brushColor, cp: false };
       drag.current = d;
-      commit(mapGrid(h.get(), hit.g.id, (g) => paintCells(g, [{ c: hit.c, r: hit.r }], brushColor)), d);
+      if (commit(mapGrid(h.get(), hit.g.id, (g) => paintCells(g, [{ c: hit.c, r: hit.r }], brushColor)), d)) bump("painted");
       return;
     }
 
@@ -699,7 +997,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       d.warned = true;
       toast("넓은 기호가 들어갈 칸이 모자라요. 더 왼쪽에 놓거나 격자를 넓혀 주세요.");
     }
-    commit(next, d);
+    if (commit(next, d) && !d.erase) bump("placed");
   };
 
   const stampAt = (d: Extract<Drag, { kind: "stamp" }>, cells: Cell[]) => {
@@ -708,12 +1006,12 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     const next = mapGrid(h.get(), d.gridId, (g0) => {
       let g = g0;
       for (const c of cells) {
-        const tc = d.origin.c + Math.floor((c.c - d.origin.c) / b.cols) * b.cols;
-        const tr = d.origin.r + Math.floor((c.r - d.origin.r) / b.rows) * b.rows;
-        const key = `${tc},${tr}`;
+        const tcol = d.origin.c + Math.floor((c.c - d.origin.c) / b.cols) * b.cols;
+        const trow = d.origin.r + Math.floor((c.r - d.origin.r) / b.rows) * b.rows;
+        const key = `${tcol},${trow}`;
         if (d.done.has(key)) continue;
         d.done.add(key);
-        g = writeBlock(g, b, tc, tr, true);
+        g = writeBlock(g, b, tcol, trow, true);
       }
       return g;
     });
@@ -726,26 +1024,29 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       for (const c of cells) {
         if (!inGrid(g, c)) continue;
         const cur = g.cells[c.r * g.cols + c.c];
-        if (d.remove && cur?.symbol !== "ns") g = placeSymbol(g, c.r, c.c, "ns") ?? g;
-        if (!d.remove && cur?.symbol === "ns") g = eraseSymbol(g, c.r, c.c);
+        if (d.remove && cur?.symbol !== BLANK_ID) g = placeSymbol(g, c.r, c.c, BLANK_ID) ?? g;
+        if (!d.remove && cur?.symbol === BLANK_ID) g = eraseSymbol(g, c.r, c.c);
       }
       return g;
     });
-    commit(next, d);
+    if (commit(next, d)) bump("carved");
   };
 
-  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const p = toWorld(e);
     const d = drag.current;
     if (!d) {
       const hit = hitGrid(p);
       const nh = hit ? { gridId: hit.g.id, c: hit.c, r: hit.r } : null;
       if (nh?.gridId !== hover?.gridId || nh?.c !== hover?.c || nh?.r !== hover?.r) setHover(nh);
+      const band = mode === "select" && !hit ? (hitBand(p)?.id ?? null) : null;
+      if (band !== bandHover) setBandHover(band);
       return;
     }
     const D = h.get();
     switch (d.kind) {
       case "pan":
+        touchView();
         setView((v) => ({ ...v, x: d.vx + e.clientX - d.sx, y: d.vy + e.clientY - d.sy }));
         return;
       case "create": {
@@ -860,11 +1161,13 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         if (d.kind === "edit") editAt(d, cells);
         else if (d.kind === "stamp") stampAt(d, cells);
         else if (d.kind === "carve") carveAt(d, cells);
-        else
+        else if (
           commit(
             mapGrid(D, d.gridId, (gg) => paintCells(gg, cells, d.color)),
             d,
-          );
+          )
+        )
+          bump("painted");
         setHover(inGrid(g, c) ? { gridId: g.id, ...c } : null);
         return;
       }
@@ -903,17 +1206,22 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
         grids: h.get().grids.map((g) => {
           if (!g.visible) return g;
           const list: Cell[] = [];
-          for (let r = 0; r < g.rows; r++)
-            for (let c = 0; c < g.cols; c++) if (inside(g.x + (c + 0.5) * geo.cw, g.y + (r + 0.5) * geo.ch)) list.push({ c, r });
+          for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.cols; c++) if (inside(g.x + (c + 0.5) * geo.cw, g.y + (r + 0.5) * geo.ch)) list.push({ c, r });
           count += list.length;
           return list.length ? paintCells(g, list, brushColor) : g;
         }),
       };
       if (!count) toast("올가미 안에 칠할 칸이 없어요");
-      else h.set(next);
+      else {
+        h.set(next);
+        bump("painted");
+      }
       return;
     }
-    if (d.kind === "resize") setPreview(null);
+    if (d.kind === "resize") {
+      setPreview(null);
+      if (d.cp) bump("resized");
+    }
   };
 
   // ---------- keyboard ----------
@@ -961,7 +1269,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       }
       if (k === "?") {
         e.preventDefault();
-        openShortcutHelp();
+        setHelpOpen(true);
         return;
       }
       if (k === "Escape") {
@@ -988,7 +1296,10 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       }
       if (e.shiftKey && lower === "h") return flipH();
       if (e.shiftKey && lower === "v") return flipV();
-      if (k === "!" || (e.shiftKey && k === "1")) return fit();
+      if (k === "!" || (e.shiftKey && k === "1")) {
+        touchView();
+        return fit();
+      }
       if (e.altKey) return;
       if (lower === "v") switchMode("select");
       else if (lower === "e") switchMode("edit");
@@ -996,6 +1307,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
       else if (lower === "k") switchMode("grid");
       else if (lower === "g") switchMode(mode === "gridEdit" ? "select" : "gridEdit");
       else if (lower === "b") switchMode(mode === "brush" ? "select" : "brush");
+      else if (lower === "m") openSaveMine();
       else if (lower === "r" && sel) rotate();
     },
     [h, sel, selGrid, active, mode, stamp, hover, doc, mine],
@@ -1013,22 +1325,35 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
 
   // ---------- export ----------
   const onExport = async (format: "png" | "jpg" | "svg") => {
-    const svg = buildSvg(h.get(), geo, { numbers: true, labels: true, legend: true, background: "#ffffff" });
+    const svg = buildSvg(h.get(), geo, { numbers: true, labels: h.get().grids.filter((g) => g.visible).length > 1, legend: true, background: "#ffffff" });
     if (!svg) return false;
-    await exportSvg(svg, format, safeName(work.title));
+    await exportSvg(svg, format, safeName(title));
     return true;
   };
 
   // ---------- render ----------
-  const defs = useMemo(() => symbolDefs(geo.cw, geo.ch), [geo]);
+  const defs = useMemo(() => {
+    const used = new Set<string>();
+    for (const g of doc.grids) for (const c of g.cells) if (c?.symbol && !knitSymbol(c.symbol)?.group) used.add(c.symbol);
+    return symbolDefs(geo.cw, geo.ch) + (used.size ? symbolDefs(geo.cw, geo.ch, "ks", used) : "");
+  }, [geo, doc.grids]);
   const z = view.zoom;
-  let dotStep = 20 * z;
-  while (dotStep < 10) dotStep *= 2;
   const cursor =
-    mode === "pan" || space ? (drag.current?.kind === "pan" ? "grabbing" : "grab") : mode === "select" ? "default" : mode === "brush" && brushTool === "eyedropper" ? "copy" : "crosshair";
+    mode === "pan" || space
+      ? drag.current?.kind === "pan"
+        ? "grabbing"
+        : "grab"
+      : mode === "select"
+        ? bandHover || drag.current?.kind === "gridMove"
+          ? "move"
+          : "default"
+        : mode === "brush" && brushTool === "eyedropper"
+          ? "copy"
+          : "cell";
 
-  const hoverGrid = hover ? doc.grids.find((g) => g.id === hover.gridId) ?? null : null;
+  const hoverGrid = hover ? (doc.grids.find((g) => g.id === hover.gridId) ?? null) : null;
   const pickW = knitSymbol(pick ?? undefined)?.width ?? 1;
+  const bg = doc.bg ? hexA(doc.bg.color, doc.bg.opacity) : "#fff";
 
   let hoverOverlay: ReactNode = null;
   if (hover && hoverGrid && !space && (!drag.current || drag.current.kind !== "pan")) {
@@ -1041,9 +1366,9 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     } else if (mode === "edit" && pick) {
       const fits = hover.c + pickW <= hoverGrid.cols;
       hoverOverlay = (
-        <g pointerEvents="none">
+        <g>
           <rect x={x} y={y} width={pickW * geo.cw} height={geo.ch} fill={fits ? "var(--seed-color-palette-lime-500)" : "#e5484d"} fillOpacity={0.14} stroke={fits ? "var(--seed-color-palette-lime-700)" : "#e5484d"} strokeWidth={1.5 / z} />
-          <use href={`#ks-${pick}`} x={x} y={y} color="#222" opacity={0.45} />
+          {pick !== ERASE_ID && <use href={`#ks-${canonicalSymbol(pick)}`} x={x} y={y} width={pickW * geo.cw} height={geo.ch} color="#222" opacity={0.45} />}
         </g>
       );
     } else if (mode === "brush" && brushTool === "paint") {
@@ -1051,12 +1376,12 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     } else if (mode === "brush" && brushTool === "eyedropper") {
       hoverOverlay = <rect x={x} y={y} width={geo.cw} height={geo.ch} fill="none" stroke="#222" strokeWidth={1.5 / z} />;
     } else if (mode === "gridEdit" && hoverGrid.id === activeId) {
-      hoverOverlay = <rect x={x} y={y} width={geo.cw} height={geo.ch} fill="none" stroke="var(--seed-color-palette-lime-700)" strokeWidth={1.5 / z} />;
+      hoverOverlay = <rect x={x} y={y} width={geo.cw} height={geo.ch} fill="var(--seed-color-palette-amber-500, #f59e0b)" fillOpacity={0.12} stroke="none" />;
     }
   }
 
   let selOverlay: ReactNode = null;
-  if (sel && selGrid && selGrid.visible) {
+  if (sel && selGrid && selGrid.visible && mode !== "gridEdit") {
     const x = selGrid.x + sel.c0 * geo.cw;
     const y = selGrid.y + sel.r0 * geo.ch;
     const w = rectW(sel) * geo.cw;
@@ -1075,7 +1400,7 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     const cursorFor = (hx: number, hy: number) => (hx === 0 ? "ns-resize" : hy === 0 ? "ew-resize" : hx === hy ? "nwse-resize" : "nesw-resize");
     selOverlay = (
       <g>
-        <rect x={x} y={y} width={w} height={hh} fill="var(--seed-color-palette-lime-500)" fillOpacity={0.1} stroke="var(--seed-color-palette-lime-700)" strokeWidth={2 / z} pointerEvents="none" />
+        <rect x={x} y={y} width={w} height={hh} fill="rgb(14 165 233)" fillOpacity={0.12} stroke="rgb(14 165 233)" strokeWidth={2 / z} />
         {mode === "select" &&
           handles.map(([hx, hy]) => (
             <rect
@@ -1087,8 +1412,9 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
               height={hs}
               rx={2 / z}
               fill="#fff"
-              stroke="var(--seed-color-palette-lime-700)"
+              stroke="rgb(14 165 233)"
               strokeWidth={1.5 / z}
+              pointerEvents="all"
               style={{ cursor: cursorFor(hx, hy) }}
             >
               <title>끌어서 이 방향으로 무늬 반복</title>
@@ -1102,31 +1428,52 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
   if (mode === "gridEdit" && active && active.visible) {
     const W = active.cols * geo.cw;
     const H = active.rows * geo.ch;
-    const t = 10 / z;
+    const t = 12 / z;
     const bar = (edge: "l" | "r" | "t" | "b", x: number, y: number, w: number, hh: number, cur: string) => (
-      <g key={edge} data-edge={edge} style={{ cursor: cur }}>
-        <rect x={x} y={y} width={w} height={hh} fill="transparent" />
-        <rect
-          x={edge === "l" || edge === "r" ? x + w / 2 - 2 / z : x}
-          y={edge === "t" || edge === "b" ? y + hh / 2 - 2 / z : y}
-          width={edge === "l" || edge === "r" ? 4 / z : w}
-          height={edge === "t" || edge === "b" ? 4 / z : hh}
-          rx={2 / z}
-          fill="var(--seed-color-palette-lime-600)"
-          opacity={0.85}
-        />
-      </g>
+      <rect key={edge} data-edge={edge} x={x} y={y} width={w} height={hh} fill="transparent" pointerEvents="all" style={{ cursor: cur }} />
     );
     editOverlay = (
       <g transform={`translate(${active.x} ${active.y})`}>
-        <rect width={W} height={H} fill="none" stroke="var(--seed-color-palette-lime-600)" strokeWidth={1.5 / z} strokeDasharray={`${5 / z} ${4 / z}`} pointerEvents="none" />
-        {bar("l", -t, 0, t, H, "ew-resize")}
-        {bar("r", W, 0, t, H, "ew-resize")}
-        {bar("t", 0, -t, W, t, "ns-resize")}
-        {bar("b", 0, H, W, t, "ns-resize")}
+        {bar("l", -t / 2, 0, t, H, "ew-resize")}
+        {bar("r", W - t / 2, 0, t, H, "ew-resize")}
+        {bar("t", 0, -t / 2, W, t, "ns-resize")}
+        {bar("b", 0, H - t / 2, W, t, "ns-resize")}
       </g>
     );
   }
+
+  let trackOverlay: ReactNode = null;
+  if (tracker.on && active && active.visible) {
+    const rev = (active.numbering ?? DEFAULT_NUMBERING).reverseRows !== false;
+    const r = rev ? active.rows - tracker.row : tracker.row - 1;
+    if (r >= 0 && r < active.rows)
+      trackOverlay = (
+        <g>
+          <rect x={active.x} y={active.y} width={active.cols * geo.cw} height={r * geo.ch} fill="#fff" fillOpacity={0.55} />
+          <rect x={active.x} y={active.y + r * geo.ch} width={active.cols * geo.cw} height={geo.ch} fill="rgb(14 165 233)" fillOpacity={0.14} stroke="rgb(14 165 233)" strokeWidth={1.5 / z} />
+        </g>
+      );
+  }
+
+  // selection summary pill (top right): the selected range, or the whole grid while editing it
+  const pillRect: (Rect & { g: KGrid }) | null =
+    sel && selGrid ? { ...sel, g: selGrid } : mode === "gridEdit" && active ? { c0: 0, r0: 0, c1: active.cols - 1, r1: active.rows - 1, g: active } : null;
+  const pillItems = useMemo(() => {
+    if (!pillRect) return [];
+    const m = new Map<string, number>();
+    const g = pillRect.g;
+    for (let r = pillRect.r0; r <= pillRect.r1; r++) {
+      const owners = rowOwners(g, r);
+      for (let c = pillRect.c0; c <= pillRect.c1; c++) {
+        const o = owners[c];
+        const id = o >= 0 ? g.cells[r * g.cols + o]?.symbol : undefined;
+        if (o >= 0 && o !== c && c !== pillRect.c0) continue;
+        const name = id ? (knitSymbol(id)?.name ?? id) : "빈칸";
+        m.set(name, (m.get(name) ?? 0) + 1);
+      }
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [pillRect?.g, pillRect?.c0, pillRect?.c1, pillRect?.r0, pillRect?.r1]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const menuItems: MenuItem[] = [
     { label: "복사", shortcut: "⌘C", disabled: !sel, onSelect: () => copySel() },
@@ -1137,389 +1484,572 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
     { label: "상하 뒤집기", shortcut: "⇧V", disabled: !sel, onSelect: flipV },
     { label: "오른쪽 회전", shortcut: "R", disabled: !sel, onSelect: rotate },
     "separator",
-    { label: "내 무늬로 등록", disabled: !active, onSelect: openSaveMine },
+    { label: "내 무늬로 등록", shortcut: "M", disabled: !active, onSelect: openSaveMine },
     { label: "삭제", shortcut: "Delete", danger: true, disabled: !sel, onSelect: clearSel },
   ];
 
-  const tools: { id: Mode; label: string; key: string; icon: ReactNode; disabled?: boolean }[] = [
-    { id: "select", label: "선택", key: "V", icon: <Pointer /> },
-    { id: "edit", label: "편집", key: "E", icon: <Pencil /> },
-    { id: "pan", label: "이동", key: "H", icon: <Hand /> },
-    { id: "grid", label: "격자 만들기", key: "K", icon: <Grid /> },
-    { id: "gridEdit", label: "격자 편집", key: "G", icon: <GridEdit />, disabled: !active },
-    { id: "brush", label: "칸 색칠", key: "B", icon: <Brush /> },
-  ];
+  const paletteHighlight = mode === "gridEdit" ? BLANK_ID : mode === "edit" && !stamp ? pick : null;
+  const navBtn = (id: LeftTab, label: string, icon: ReactNode) => {
+    const on = paletteOpen && tab === id;
+    return (
+      <button
+        className={cx(ab(on ? "brandSolid" : "ghost", "small", "iconOnly"), !on && "text-fg-neutral-muted")}
+        type="button"
+        aria-label={label}
+        title={label}
+        aria-pressed={on}
+        data-maker-nav={id}
+        style={seedSize(36, 36)}
+        onClick={() => {
+          if (on) setPaletteOpen(false);
+          else {
+            setTab(id);
+            setPaletteOpen(true);
+          }
+        }}
+      >
+        {icon}
+      </button>
+    );
+  };
+  const navSoon = (label: string, icon: ReactNode) => (
+    <button className={cx(ab("ghost", "small", "iconOnly"), "text-fg-neutral-muted")} type="button" aria-label={label} title={label} aria-pressed={false} style={seedSize(36, 36)} onClick={soon}>
+      {icon}
+    </button>
+  );
 
-  const leftPanel = (
-    <LeftPanel
-      tab={tab}
-      setTab={setTab}
-      geo={geo}
-      pick={pick}
-      onPick={(id) => {
-        setPick(id);
-        setStamp(null);
-        setMode("edit");
-        setSel(null);
-        if (!wide) setLeftOpen(false);
-      }}
-      stamp={stamp}
-      onStamp={chooseStamp}
-      active={active}
-      onFillGrid={fillGrid}
-      onNewGridFromStamp={newGridFromStamp}
-      mine={mine}
-      onSaveMine={openSaveMine}
-      onDeleteMine={deleteMine}
-      className={wide ? "" : "absolute inset-y-0 left-0 z-30 shadow-s3"}
-    />
-  );
-  const rightPanel = (
-    <RightPanel
-      doc={doc}
-      activeId={activeId}
-      sel={sel}
-      onActivate={(id) => {
-        setActiveId(id);
-        if (sel && sel.gridId !== id) setSel(null);
-      }}
-      onAddGrid={() => addGrid(gridPop.cols, gridPop.rows)}
-      onRename={(id, name) => editGrid(id, (g) => (g.name === name ? g : { ...g, name }))}
-      onToggle={(id) => editGrid(id, (g) => ({ ...g, visible: !g.visible }))}
-      onDelete={deleteGrid}
-      onGauge={(gauge) => h.set((d) => ({ ...d, gauge: { sts: clamp(Math.round(gauge.sts) || 1, 4, 60), rows: clamp(Math.round(gauge.rows) || 1, 4, 80) } }))}
-      onNumbering={setNumbering}
-      onFlipH={flipH}
-      onFlipV={flipV}
-      onRotate={rotate}
-      onClearSel={clearSel}
-      onSaveMine={openSaveMine}
-      className={wide ? "" : "absolute inset-y-0 right-0 z-30 shadow-s3"}
-    />
-  );
+  const writtenRows = useMemo(() => {
+    const g = active ?? doc.grids[0];
+    if (!written || !g) return null;
+    const rev = (g.numbering ?? DEFAULT_NUMBERING).reverseRows !== false;
+    const sides = g.sides ?? { worked: "flat", firstRowSide: "RS" };
+    const out: { n: number; side: string; text: string }[] = [];
+    for (let i = 0; i < g.rows; i++) {
+      const r = rev ? g.rows - 1 - i : i;
+      const n = i + 1;
+      const rs = sides.worked === "round" || (n % 2 === 1) === (sides.firstRowSide === "RS");
+      const owners = rowOwners(g, r);
+      const seq: string[] = [];
+      // right-side rows are read right → left
+      const cols = Array.from({ length: g.cols }, (_, k) => k);
+      if (rs) cols.reverse();
+      for (const c of cols) {
+        const o = owners[c];
+        if (o >= 0 && o !== c) continue;
+        const id = o >= 0 ? g.cells[r * g.cols + o]?.symbol : undefined;
+        seq.push(id ? (knitSymbol(id)?.name ?? id) : "겉뜨기");
+      }
+      const runs: string[] = [];
+      for (let k = 0; k < seq.length; ) {
+        let e = k + 1;
+        while (e < seq.length && seq[e] === seq[k]) e++;
+        runs.push(e - k > 1 ? `${seq[k]} ${e - k}` : seq[k]);
+        k = e;
+      }
+      out.push({ n, side: rs ? "겉면" : "안면", text: runs.join(", ") });
+    }
+    return { name: g.name, rows: out };
+  }, [written, active, doc.grids]);
 
   return (
-    <EditorShell
-      workId={work.id}
-      title={work.title}
-      craftLabel={CRAFT_LABEL.knitting}
-      status={status}
-      canUndo={h.canUndo}
-      canRedo={h.canRedo}
-      onUndo={h.undo}
-      onRedo={h.redo}
-      onExport={onExport}
-      shortcuts={SHORTCUTS}
-    >
-      <div className="absolute inset-0 flex">
-        {(wide || leftOpen) && leftPanel}
-
-        <div
-          ref={wrapRef}
-          className="relative min-w-0 flex-1 overflow-hidden"
-          style={{
-            backgroundColor: "#f3f3f1",
-            backgroundImage: "radial-gradient(circle, rgba(0,0,0,0.13) 1px, transparent 1.2px)",
-            backgroundSize: `${dotStep}px ${dotStep}px`,
-            backgroundPosition: `${view.x}px ${view.y}px`,
-          }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            if (mode === "select") setCtx({ x: e.clientX, y: e.clientY });
-          }}
-        >
-          <svg
-            ref={svgRef}
-            className="absolute inset-0 size-full touch-none"
-            style={{ cursor }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-            onPointerLeave={() => !drag.current && setHover(null)}
-            role="application"
-            aria-label="대바늘 차트 캔버스"
-          >
-            <defs dangerouslySetInnerHTML={{ __html: defs }} />
-            <g transform={`translate(${view.x} ${view.y}) scale(${z})`}>
-              {visibleGrids.map((g) => (
-                <GridLayer key={g.id} grid={g} geo={geo} />
-              ))}
-              {visibleGrids.map((g) => (
-                <g key={`l-${g.id}`}>
-                  {g.id === activeId && (
-                    <rect
-                      x={g.x - 3 / z}
-                      y={g.y - 3 / z}
-                      width={g.cols * geo.cw + 6 / z}
-                      height={g.rows * geo.ch + 6 / z}
-                      fill="none"
-                      stroke="var(--seed-color-palette-lime-600)"
-                      strokeWidth={1.5 / z}
-                      rx={2 / z}
-                      pointerEvents="none"
-                    />
-                  )}
-                  <text
-                    data-grid-label={g.id}
-                    x={g.x}
-                    y={g.y - 9 / z}
-                    fontSize={12 / z}
-                    fontWeight={600}
-                    fill={g.id === activeId ? "var(--seed-color-palette-lime-800)" : "#555"}
-                    style={{ cursor: mode === "select" ? "move" : undefined, userSelect: "none" }}
-                  >
-                    {g.name}
-                    <tspan fontWeight={400} fill="#8a8a8a">{`  ${g.cols}코 × ${g.rows}단`}</tspan>
-                  </text>
-                </g>
-              ))}
-              {hoverOverlay}
-              {selOverlay}
-              {editOverlay}
-              {preview?.create && (
-                <g pointerEvents="none">
-                  <rect
-                    x={preview.create.x}
-                    y={preview.create.y}
-                    width={preview.create.w}
-                    height={preview.create.h}
-                    fill="#fff"
-                    fillOpacity={0.7}
-                    stroke="var(--seed-color-palette-lime-700)"
-                    strokeWidth={1.5 / z}
-                    strokeDasharray={`${5 / z} ${4 / z}`}
-                  />
-                </g>
-              )}
-              {preview?.lasso && (
-                <polygon
-                  points={preview.lasso.map((q) => `${q.x},${q.y}`).join(" ")}
-                  fill={brushColor ?? "#888"}
-                  fillOpacity={0.15}
-                  stroke="#222"
-                  strokeWidth={1.2 / z}
-                  strokeDasharray={`${4 / z} ${3 / z}`}
-                  pointerEvents="none"
-                />
-              )}
-            </g>
-          </svg>
-
-          {/* live size label while dragging a new grid / resizing */}
-          {preview?.create && (
-            <div
-              className="pointer-events-none absolute rounded-r1_5 bg-bg-neutral-inverted px-x2 py-x1 text-[0.75rem] font-semibold whitespace-nowrap text-fg-neutral-inverted tabular-nums"
-              style={{ left: (preview.create.x + preview.create.w) * z + view.x + 8, top: (preview.create.y + preview.create.h) * z + view.y + 8 }}
-            >
-              {preview.create.cols}코 × {preview.create.rows}단
-            </div>
-          )}
-          {preview?.resize && (
-            <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 rounded-r1_5 bg-bg-neutral-inverted px-x2_5 py-x1 text-[0.8125rem] font-semibold text-fg-neutral-inverted tabular-nums">
-              {preview.resize}
-            </div>
-          )}
-
-          {/* narrow screens: panel toggles */}
-          {!wide && (
-            <>
-              <Button size="sm" className="absolute top-3 left-3 z-20 shadow-s1" onClick={() => setLeftOpen((v) => !v)}>
-                기호
-              </Button>
-              <Button size="sm" className="absolute top-3 right-3 z-20 shadow-s1" onClick={() => setRightOpen((v) => !v)}>
-                <Layers className="size-4" />
-                레이어
-              </Button>
-            </>
-          )}
-
-          {/* mode hint */}
-          {(stamp || (mode === "gridEdit" && active) || (mode === "brush" && brushTool !== "paint")) && (
-            <div className="absolute top-3 left-1/2 z-10 flex max-w-[calc(100%-200px)] -translate-x-1/2 items-center gap-x2 rounded-full bg-bg-neutral-inverted py-x1 pr-x1 pl-x3 text-[0.8125rem] text-fg-neutral-inverted shadow-s2">
-              <span className="truncate">
-                {stamp
-                  ? `${stamp.name} · 격자를 누르면 무늬가 한 번 찍히고, 끌면 이어서 찍혀요.`
-                  : mode === "gridEdit"
-                    ? "가장자리를 끌면 줄·열이 통째로 늘거나 줄어요. Alt(Option)를 누른 채 칸을 끌면 칸이 빠져요."
-                    : brushTool === "eyedropper"
-                      ? "칸을 클릭하면 그 색을 붓 색으로 가져와요"
-                      : "영역을 그려 감싸면 안쪽 칸이 한 번에 칠해져요"}
-              </span>
-              <button
-                type="button"
-                aria-label="취소"
-                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full hover:bg-white/15"
-                onClick={() => {
-                  if (stamp) setStamp(null);
-                  else if (mode === "gridEdit") setMode("select");
-                  else setBrushTool("paint");
-                }}
+    <div className="knit-editor fixed top-0 left-0 z-20 h-dvh w-full overflow-hidden overscroll-none" data-editor-shell>
+      <svg aria-hidden="true" width="0" height="0" className="absolute">
+        <defs dangerouslySetInnerHTML={{ __html: defs }} />
+      </svg>
+      <div className="h-full min-h-0 overflow-hidden">
+        <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-bg-layer-fill">
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            {/* icon rail */}
+            <nav data-maker-rail="true" className="relative z-[90] flex h-full w-14 shrink-0 flex-col items-center overflow-hidden border-r border-stroke-neutral-muted bg-bg-layer-default px-x1 py-x2 transition-[width,opacity] duration-200">
+              <Link
+                className="mb-x3 flex size-x9 items-center justify-center rounded-r2 text-fg-neutral hover:bg-bg-layer-default-pressed focus-visible:outline-2 focus-visible:outline-stroke-focus-ring"
+                aria-label="PATTERNERS"
+                href="/home"
               >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
-
-          {/* empty state */}
-          {doc.grids.length === 0 && !preview?.create && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-24">
-              <div className="pointer-events-auto flex max-w-[320px] flex-col items-center gap-x3 rounded-r4 border border-stroke-neutral-muted bg-bg-layer-default px-x6 py-x6 text-center shadow-s1">
-                <span className="flex size-11 items-center justify-center rounded-full bg-bg-brand-weak text-fg-brand">
-                  <Grid className="size-5" />
+                <span aria-hidden="true" className="flex size-8 items-center justify-center overflow-hidden rounded-md">
+                  <svg viewBox="0 0 32 32" className="size-8">
+                    <path d="M8.5 27.5V4.5H17.2C22.4 4.5 25.6 7.5 25.6 12.2C25.6 17 22.3 20 17.1 20H13.6V27.5Z M13.6 15.7H16.6C19 15.7 20.4 14.4 20.4 12.2C20.4 10.1 19 8.8 16.6 8.8H13.6Z" fill="currentColor" fillRule="evenodd" />
+                  </svg>
                 </span>
-                <p className="text-[0.9375rem] leading-[1.5] font-semibold">격자 도구(K)로 드래그해 격자를 만들어 주세요</p>
-                <p className="text-[0.8125rem] leading-[1.5] text-fg-neutral-muted">가로·세로 수를 적어서 만들 수도 있어요.</p>
-                <Button variant="primary" size="sm" onClick={() => switchMode("grid")}>
-                  격자 만들기
-                </Button>
+              </Link>
+              <div className="flex flex-col items-center gap-x1" data-tour="nav-tabs">
+                {navBtn("symbols", "기호", <Shapes className="seed-icon" />)}
+                {navBtn("library", "무늬 라이브러리", <LibraryBig className="seed-icon" />)}
+                {navBtn("mine", "내 무늬", <Box className="seed-icon" />)}
+                {navSoon("원문·파일로 만들기", <FileUp className="seed-icon" />)}
+                {navSoon("AI 어시스턴트", <Sparkle className="seed-icon" />)}
+                <span className="relative">
+                  {navSoon("실체화 (β)", <Rotate3d className="seed-icon" />)}
+                  <span className="t1-bold pointer-events-none absolute -top-1 -right-1 rounded-r1 bg-bg-brand-weak px-x1 text-fg-brand">β</span>
+                </span>
+              </div>
+              <div className="mt-auto flex flex-col items-center gap-x1 pb-x2">
+                <div className="mb-x1 h-px w-7 bg-stroke-neutral-muted" />
+                <button
+                  className={cx(ab("ghost", "small", "iconOnly"), "text-fg-neutral-muted")}
+                  type="button"
+                  data-tour="export"
+                  aria-label="내보내기"
+                  title="내보내기"
+                  aria-haspopup="dialog"
+                  aria-expanded={exportOpen}
+                  style={seedSize(36, 36)}
+                  onClick={() => setExportOpen(true)}
+                >
+                  <Download className="seed-icon" />
+                </button>
+              </div>
+            </nav>
+
+            <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              <Palette
+                width={paletteW}
+                onWidth={setPaletteW}
+                open={paletteOpen}
+                onCollapse={() => setPaletteOpen(false)}
+                title={title}
+                onRename={practice ? undefined : rename}
+                save={practice ? undefined : save.status}
+                onRetrySave={save.retry}
+                tab={tab}
+                geo={geo}
+                picked={paletteHighlight}
+                onPick={(id) => {
+                  setPick(id);
+                  setStamp(null);
+                  setMode("edit");
+                  setSel(null);
+                  if (practice) setProg((p) => ({ ...p, picked: true }));
+                }}
+                onCreateGlyph={() => {
+                  if (practice) setProg((p) => ({ ...p, glyphOpened: true }));
+                  soon();
+                }}
+                stamp={stamp}
+                onStamp={chooseStamp}
+                active={active}
+                onFillGrid={fillGrid}
+                onNewGridFromStamp={newGridFromStamp}
+                mine={mine}
+                onSaveMine={openSaveMine}
+                onDeleteMine={deleteMine}
+              />
+
+              <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                <div
+                  ref={wrapRef}
+                  className="@container/maker-canvas relative min-h-0 min-w-0 flex-1 overflow-hidden"
+                  data-tour="canvas"
+                  style={{ ["--maker-top-right" as string]: "3.5rem", ["--maker-bottom-chrome" as string]: `${BOTTOM_CHROME}px` }}
+                >
+                  <div className="h-full min-h-0 w-full">
+                    <div
+                      ref={surfaceRef}
+                      data-canvas-surface="true"
+                      role="application"
+                      aria-label="대바늘 차트 캔버스"
+                      className="relative z-0 h-full w-full touch-none overflow-hidden select-none"
+                      style={{
+                        cursor,
+                        backgroundColor: "rgb(255, 255, 255)",
+                        backgroundImage: "radial-gradient(oklch(0.78 0.01 260 / 0.35) 1px, transparent 1px)",
+                        backgroundSize: `${20 * z}px ${20 * z}px`,
+                        backgroundPosition: `${view.x}px ${view.y}px`,
+                      }}
+                      onPointerDown={onPointerDown}
+                      onPointerMove={onPointerMove}
+                      onPointerUp={onPointerUp}
+                      onPointerCancel={onPointerUp}
+                      onPointerLeave={() => {
+                        if (!drag.current) {
+                          setHover(null);
+                          setBandHover(null);
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        if (mode === "select") setCtx({ x: e.clientX, y: e.clientY });
+                      }}
+                    >
+                      <div data-export-root="true" className="relative origin-top-left overflow-visible" style={{ transform: `translate(${tx}px, ${ty}px) scale(${z})`, willChange: viewLive === "idle" ? "auto" : "transform" }}>
+                        {visibleGrids.map((g) => (
+                          <GridView key={g.id} grid={g} geo={geo} active={g.id === activeId} bg={bg} />
+                        ))}
+                      </div>
+                      <svg className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden="true">
+                        <g transform={`translate(${tx} ${ty}) scale(${z})`}>
+                          {trackOverlay}
+                          {hoverOverlay}
+                          {selOverlay}
+                          {editOverlay}
+                          {bandHover && mode === "select" && (() => {
+                            const g = doc.grids.find((x) => x.id === bandHover);
+                            return g ? <rect x={g.x} y={g.y} width={g.cols * geo.cw} height={g.rows * geo.ch} fill="none" stroke="rgb(14 165 233)" strokeWidth={2 / z} /> : null;
+                          })()}
+                          {preview?.create && (
+                            <rect
+                              x={preview.create.x}
+                              y={preview.create.y}
+                              width={preview.create.w}
+                              height={preview.create.h}
+                              fill="#fff"
+                              fillOpacity={0.7}
+                              stroke="var(--seed-color-palette-lime-700)"
+                              strokeWidth={1.5 / z}
+                              strokeDasharray={`${5 / z} ${4 / z}`}
+                            />
+                          )}
+                          {preview?.lasso && (
+                            <polygon
+                              points={preview.lasso.map((q) => `${q.x},${q.y}`).join(" ")}
+                              fill={brushColor ?? "#888"}
+                              fillOpacity={0.15}
+                              stroke="#222"
+                              strokeWidth={1.2 / z}
+                              strokeDasharray={`${4 / z} ${3 / z}`}
+                            />
+                          )}
+                        </g>
+                      </svg>
+
+                      {preview?.create && (
+                        <div
+                          className="pointer-events-none absolute rounded-r1_5 bg-bg-neutral-inverted px-x2 py-x1 text-[0.75rem] font-semibold whitespace-nowrap text-fg-neutral-inverted tabular-nums"
+                          style={{ left: (preview.create.x + preview.create.w) * z + tx + 8, top: (preview.create.y + preview.create.h) * z + ty + 8 }}
+                        >
+                          {preview.create.cols}코 × {preview.create.rows}단
+                        </div>
+                      )}
+                      {preview?.resize && (
+                        <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-r1_5 bg-bg-neutral-inverted px-x2_5 py-x1 text-[0.8125rem] font-semibold text-fg-neutral-inverted tabular-nums">
+                          {preview.resize}
+                        </div>
+                      )}
+
+                      {/* selection summary */}
+                      {pillRect && (
+                        <div className="pointer-events-none absolute top-[var(--maker-top-right,0.75rem)] right-3 z-[80]">
+                          <div className="pointer-events-auto" onPointerDown={(e) => e.stopPropagation()}>
+                            <div className="flex max-w-64 min-w-[9rem] flex-col gap-1 rounded-md border border-stroke-neutral-muted bg-bg-layer-default/90 px-2.5 py-1.5 shadow-s1 backdrop-blur-sm select-none" data-selection-ui="true">
+                              <button type="button" className="flex w-full items-center justify-between gap-2 text-left" aria-expanded={pillOpen} title={pillOpen ? "접기" : "펼치기"} onClick={() => setPillOpen((v) => !v)}>
+                                <span className="text-[11px] font-semibold text-fg-neutral tabular-nums">
+                                  {rectW(pillRect) * rectH(pillRect)}개 선택
+                                  <span className="ml-1.5 font-medium text-fg-neutral-muted">
+                                    {rectW(pillRect)}×{rectH(pillRect)}
+                                  </span>
+                                </span>
+                                <ChevronDown className={cx("size-3.5 shrink-0 text-fg-neutral-muted transition-transform", pillOpen && "rotate-180")} />
+                              </button>
+                              {pillOpen && (
+                                <ul className="flex max-h-48 flex-col gap-0.5 overflow-y-auto overscroll-y-contain pr-0.5">
+                                  {pillItems.map(([name, n]) => (
+                                    /* layout-audit-ignore: tiny-text — the reference selection summary lists counts at 10px */
+                                    <li key={name} className="text-[10px] leading-snug text-fg-neutral-muted">
+                                      {name} {n}개
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* top-left: written pattern */}
+                  <div className="contents">
+                    <div className="pointer-events-none absolute inset-0 z-80">
+                      <div className="pointer-events-none absolute top-3 left-3" data-tour="written-toggle">
+                        <button
+                          className={cx(
+                            ab("neutralOutline"),
+                            AB_TAIL,
+                            "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted px-2.5 shadow-s2",
+                            written ? "bg-bg-layer-default-pressed text-fg-neutral" : "bg-bg-layer-default text-fg-neutral hover:bg-bg-layer-default-pressed/80",
+                          )}
+                          type="button"
+                          aria-pressed={written}
+                          aria-label="서술도안 보기"
+                          style={seedSize(78.78, 32)}
+                          onClick={() => setWritten((v) => !v)}
+                        >
+                          <ScrollText className="size-3.5" />
+                          <span className="text-[11px] leading-none font-medium">서술도안</span>
+                        </button>
+                        {writtenRows && (
+                          <div className="pointer-events-auto mt-2 flex max-h-[min(60vh,520px)] w-80 flex-col overflow-hidden rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default shadow-s2">
+                            <div className="flex h-10 shrink-0 items-center justify-between border-b border-stroke-neutral-muted px-x3">
+                              <span className="t2-bold truncate text-fg-neutral">{writtenRows.name} · 서술도안</span>
+                              <button type="button" aria-label="닫기" className="flex size-7 items-center justify-center rounded-r2 text-fg-neutral-muted hover:bg-bg-layer-default-pressed" onClick={() => setWritten(false)}>
+                                <X className="size-3.5" />
+                              </button>
+                            </div>
+                            <ol className="min-h-0 flex-1 overflow-y-auto px-x3 py-x2">
+                              {writtenRows.rows.map((r) => (
+                                <li key={r.n} className="py-1 text-[12px] leading-[1.5] text-fg-neutral">
+                                  <span className="mr-x1_5 font-semibold tabular-nums">{r.n}단</span>
+                                  <span className="mr-x1_5 text-fg-neutral-muted">({r.side})</span>
+                                  {r.text}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* top-right: mode */}
+                  <div className="pointer-events-none absolute top-3 right-3 z-50 flex items-center gap-2">
+                    <Menu
+                      align="end"
+                      trigger={({ toggle }) => (
+                        <button
+                          className={cx(
+                            ab("neutralOutline"),
+                            AB_TAIL,
+                            "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 hover:bg-bg-layer-default-pressed/80 [&_svg]:size-3.5",
+                          )}
+                          type="button"
+                          data-maker-mode={mode}
+                          aria-label={`지금 모드: ${MODE_INFO[mode].label} · 눌러서 바꾸기`}
+                          aria-haspopup="menu"
+                          onClick={toggle}
+                        >
+                          {MODE_INFO[mode].icon("size-4")}
+                          <span className="text-[11px] leading-none font-medium">{MODE_INFO[mode].label}</span>
+                          <ChevronDown className="!size-3 text-fg-neutral-muted" />
+                        </button>
+                      )}
+                      items={(Object.keys(MODE_INFO) as Mode[]).map((m) => ({
+                        label: MODE_INFO[m].label,
+                        shortcut: MODE_INFO[m].key,
+                        disabled: m === "gridEdit" && !active,
+                        onSelect: () => switchMode(m),
+                      }))}
+                    />
+                  </div>
+
+                  {/* bottom toolbar + its popovers */}
+                  <div className="pointer-events-none absolute bottom-3 z-50 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-col items-center gap-2 pb-[env(safe-area-inset-bottom)]" style={{ left: "50%" }}>
+                    <div className="flex flex-col items-center gap-2">
+                      {mode === "grid" && (
+                        <div className="pointer-events-auto flex flex-wrap items-center gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-floating/95 px-x3 py-x2 shadow-s2">
+                          <span className="text-[12px] text-fg-neutral-muted">캔버스를 끌거나 수를 적어 만드세요</span>
+                          <form
+                            className="flex items-center gap-x2"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              addGrid(gridPop.cols, gridPop.rows);
+                              setMode("select");
+                            }}
+                          >
+                            <label className="flex items-center gap-x1 text-[12px] text-fg-neutral-muted">
+                              가로
+                              <input
+                                type="number"
+                                min={1}
+                                max={400}
+                                value={gridPop.cols}
+                                aria-label="가로 코 수"
+                                onChange={(e) => setGridPop((s) => ({ ...s, cols: clamp(Number(e.target.value) || 1, 1, 400) }))}
+                                className="h-8 w-16 rounded-r2 bg-bg-layer-fill px-x2 text-[13px] text-fg-neutral tabular-nums outline-none focus:ring-1 focus:ring-stroke-neutral-contrast"
+                              />
+                            </label>
+                            <label className="flex items-center gap-x1 text-[12px] text-fg-neutral-muted">
+                              세로
+                              <input
+                                type="number"
+                                min={1}
+                                max={400}
+                                value={gridPop.rows}
+                                aria-label="세로 단 수"
+                                onChange={(e) => setGridPop((s) => ({ ...s, rows: clamp(Number(e.target.value) || 1, 1, 400) }))}
+                                className="h-8 w-16 rounded-r2 bg-bg-layer-fill px-x2 text-[13px] text-fg-neutral tabular-nums outline-none focus:ring-1 focus:ring-stroke-neutral-contrast"
+                              />
+                            </label>
+                            <button type="submit" className={cx(ab("brandSolid"), AB_TAIL, "h-8 px-x3 text-[12px] font-medium")}>
+                              만들기
+                            </button>
+                          </form>
+                        </div>
+                      )}
+                      {mode === "brush" && (
+                        <div data-tour="brush-palette" className="pointer-events-auto flex max-w-full flex-wrap items-center gap-x1_5 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-floating/95 px-x3 py-x2 shadow-s2">
+                          {doc.colors.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              aria-label={`색 ${c}`}
+                              aria-pressed={brushTool !== "eyedropper" && brushColor === c}
+                              onClick={() => {
+                                setBrushColor(c);
+                                if (brushTool === "eyedropper") setBrushTool("paint");
+                              }}
+                              className={cx("size-6 rounded-full border border-black/10", brushTool !== "eyedropper" && brushColor === c && "ring-2 ring-stroke-neutral-contrast ring-offset-2")}
+                              style={{ background: c }}
+                            />
+                          ))}
+                          <label className="relative flex size-6 cursor-pointer items-center justify-center rounded-full border border-dashed border-stroke-neutral-weak text-fg-neutral-muted hover:bg-bg-layer-default-pressed" title="직접 색 고르기">
+                            <Plus className="size-3.5" />
+                            <input
+                              type="color"
+                              aria-label="직접 색 고르기"
+                              className="absolute inset-0 cursor-pointer opacity-0"
+                              onChange={(e) => {
+                                const c = e.target.value;
+                                setBrushColor(c);
+                                if (brushTool === "eyedropper") setBrushTool("paint");
+                                if (!h.get().colors.includes(c)) h.set((d) => ({ ...d, colors: [...d.colors, c].slice(-16) }));
+                              }}
+                            />
+                          </label>
+                          <Divider />
+                          <ToolBtn label="지우개 (색 지우기)" active={brushTool !== "eyedropper" && brushColor === null} onClick={() => setBrushColor(null)}>
+                            <Eraser className="size-4" />
+                          </ToolBtn>
+                          <ToolBtn label="스포이드" active={brushTool === "eyedropper"} onClick={() => setBrushTool((t) => (t === "eyedropper" ? "paint" : "eyedropper"))}>
+                            <Pipette className="size-4" />
+                          </ToolBtn>
+                          <ToolBtn label="올가미 채우기" active={brushTool === "lasso"} onClick={() => setBrushTool((t) => (t === "lasso" ? "paint" : "lasso"))}>
+                            <Lasso className="size-4" />
+                          </ToolBtn>
+                        </div>
+                      )}
+                      {tracker.on && active && (
+                        <div className="pointer-events-auto flex items-center gap-x1 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-floating/95 px-x2 py-x1 shadow-s2">
+                          <span className="px-x1 text-[12px] font-medium text-fg-neutral tabular-nums">따라 뜨기 · {tracker.row}단</span>
+                          <button className={cx(ab("ghost"), AB_TAIL, "h-7 px-x2 text-[12px]")} type="button" disabled={tracker.row <= 1} onClick={() => setTracker((t) => ({ ...t, row: Math.max(1, t.row - 1) }))}>
+                            이전 단
+                          </button>
+                          <button className={cx(ab("brandSolid"), AB_TAIL, "h-7 px-x2 text-[12px]")} type="button" disabled={tracker.row >= active.rows} onClick={() => setTracker((t) => ({ ...t, row: Math.min(active.rows, t.row + 1) }))}>
+                            다음 단
+                          </button>
+                        </div>
+                      )}
+                      <div className="maker-bottom-tools pointer-events-auto flex items-center gap-x1 rounded-r4 border border-stroke-neutral-muted bg-bg-layer-floating/95 p-x1_5 shadow-s3 backdrop-blur-md @max-[38rem]/maker-canvas:max-w-full @max-[38rem]/maker-canvas:flex-wrap @max-[38rem]/maker-canvas:justify-center @max-[38rem]/maker-canvas:gap-x-x3 @max-[38rem]/maker-canvas:gap-y-x1">
+                        <div className="flex items-center gap-0.5">
+                          <ToolBtn label="실행 취소" onClick={h.undo}>
+                            <Undo2 />
+                          </ToolBtn>
+                          <ToolBtn label="다시 실행" onClick={h.redo}>
+                            <Redo2 />
+                          </ToolBtn>
+                        </div>
+                        <Divider className="@max-[38rem]/maker-canvas:hidden" />
+                        <div className="relative h-8 overflow-hidden @max-[38rem]/maker-canvas:order-first" style={{ width: 236 }}>
+                          <div data-tour="toolbar-tools" className="relative flex h-8 w-max items-center gap-0.5 opacity-100" role="toolbar" aria-label="도구">
+                            <ToolBtn label="선택 (V)" active={mode === "select"} onClick={() => switchMode("select")}>
+                              <MousePointer2 />
+                            </ToolBtn>
+                            <ToolBtn label="삽입 (E)" active={mode === "edit"} onClick={() => switchMode("edit")}>
+                              <Pencil />
+                            </ToolBtn>
+                            <ToolBtn label="이동" active={mode === "pan"} onClick={() => switchMode("pan")}>
+                              <Hand />
+                            </ToolBtn>
+                            <ToolBtn label="격자 만들기 (K)" tour="toolbar-grid" active={mode === "grid"} onClick={() => switchMode("grid")}>
+                              <Grid3x3 className="size-4" />
+                            </ToolBtn>
+                            <span className="inline-flex">
+                              <ToolBtn label="격자 편집 (G)" tour="toolbar-grid-edit" active={mode === "gridEdit"} disabled={!active} onClick={() => switchMode(mode === "gridEdit" ? "select" : "gridEdit")}>
+                                <Scaling className="size-4" />
+                              </ToolBtn>
+                            </span>
+                            <ToolBtn label="칸 색칠 (B)" tour="toolbar-brush" className="relative" active={mode === "brush"} onClick={() => switchMode(mode === "brush" ? "select" : "brush")}>
+                              <Paintbrush className="size-4" />
+                              <span aria-hidden="true" className="absolute right-0.5 bottom-0.5 size-1.5 rounded-full ring-1 ring-bg-layer-default" style={{ backgroundColor: brushColor ?? "#ffffff" }} />
+                            </ToolBtn>
+                            <ToolBtn
+                              label="따라 뜨기"
+                              pressed={tracker.on}
+                              active={tracker.on}
+                              onClick={() => {
+                                if (!active && !tracker.on) {
+                                  toast("따라 뜰 격자를 먼저 골라 주세요");
+                                  return;
+                                }
+                                setTracker((t) => ({ on: !t.on, row: t.row }));
+                              }}
+                            >
+                              <Footprints className="size-4" />
+                            </ToolBtn>
+                          </div>
+                        </div>
+                        <Divider className="@max-[38rem]/maker-canvas:hidden" />
+                        <div data-tour="register-icon" className="flex items-center gap-0.5">
+                          <ToolBtn label="내 무늬로 등록 (M)" onClick={openSaveMine}>
+                            <BookmarkPlus />
+                          </ToolBtn>
+                        </div>
+                        <Divider className="@max-[38rem]/maker-canvas:hidden" />
+                        <div data-tour="help">
+                          <Menu
+                            align="end"
+                            trigger={({ toggle }) => (
+                              <button className={cx(ab("ghost"), AB_TAIL, "w-x8 px-0")} type="button" aria-label="단축키 도움말" aria-haspopup="menu" style={seedSize(32, 32)} onClick={toggle}>
+                                <CircleHelp />
+                              </button>
+                            )}
+                            items={[
+                              { label: "심화 레슨", onSelect: onLessons, disabled: !!practice },
+                              { label: "단축키 보기", shortcut: "?", onSelect: () => setHelpOpen(true) },
+                            ]}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <RightPanel
+                  doc={doc}
+                  activeId={activeId}
+                  zoom={z}
+                  savedAt={save.savedAt}
+                  practice={!!practice}
+                  onZoom={(a) => (a === "in" ? zoomAt(1.25) : a === "out" ? zoomAt(0.8) : a === "reset" ? zoomAt(1 / viewRef.current.zoom) : (touchView(), fit()))}
+                  onHistory={soon}
+                  onActivate={(id) => {
+                    setActiveId(id);
+                    if (sel && sel.gridId !== id) setSel(null);
+                  }}
+                  onRename={(id, name) => editGrid(id, (g) => (g.name === name ? g : { ...g, name }))}
+                  onToggle={(id) => editGrid(id, (g) => ({ ...g, visible: !g.visible }))}
+                  onDelete={deleteGrid}
+                  onAddGrid={() => addGrid(gridPop.cols, gridPop.rows)}
+                  onAddFolder={soon}
+                  onNumbering={(n) => active && editGrid(active.id, (g) => ({ ...g, numbering: n }))}
+                  onSides={(s) => active && editGrid(active.id, (g) => ({ ...g, sides: s }))}
+                  onGaugeOn={(on) => h.set((d) => ({ ...d, gaugeOn: on }))}
+                  onGauge={(gauge) => h.set((d) => ({ ...d, gauge: { sts: clamp(Math.round(gauge.sts) || 1, 4, 60), rows: clamp(Math.round(gauge.rows) || 1, 4, 80) } }))}
+                  onClearRows={clearRows}
+                  onBg={(b) => h.set((d) => ({ ...d, bg: b }))}
+                />
               </div>
             </div>
-          )}
-
-          {/* floating bottom toolbar + its popovers */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex flex-col items-center gap-2 px-3">
-            {mode === "grid" && (
-              <Floating className="pointer-events-auto flex flex-wrap items-center gap-x2 px-x3 py-x2">
-                <span className="text-[0.8125rem] text-fg-neutral-muted">캔버스를 드래그해 크기를 정하거나, 숫자를 입력하세요</span>
-                <form
-                  className="flex items-center gap-x2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    addGrid(gridPop.cols, gridPop.rows);
-                    setMode("select");
-                  }}
-                >
-                  <label className="flex items-center gap-x1 text-[0.8125rem] text-fg-neutral-muted">
-                    가로
-                    <input
-                      type="number"
-                      min={1}
-                      max={400}
-                      value={gridPop.cols}
-                      aria-label="가로 코 수"
-                      onChange={(e) => setGridPop((s) => ({ ...s, cols: clamp(Number(e.target.value) || 1, 1, 400) }))}
-                      className="h-8 w-16 rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x2 text-[0.875rem] text-fg-neutral tabular-nums outline-none focus:border-stroke-neutral-contrast"
-                    />
-                  </label>
-                  <label className="flex items-center gap-x1 text-[0.8125rem] text-fg-neutral-muted">
-                    세로
-                    <input
-                      type="number"
-                      min={1}
-                      max={400}
-                      value={gridPop.rows}
-                      aria-label="세로 단 수"
-                      onChange={(e) => setGridPop((s) => ({ ...s, rows: clamp(Number(e.target.value) || 1, 1, 400) }))}
-                      className="h-8 w-16 rounded-r2 border border-stroke-neutral-weak bg-bg-layer-default px-x2 text-[0.875rem] text-fg-neutral tabular-nums outline-none focus:border-stroke-neutral-contrast"
-                    />
-                  </label>
-                  <Button type="submit" variant="primary" size="sm">
-                    만들기
-                  </Button>
-                </form>
-              </Floating>
-            )}
-            {mode === "brush" && (
-              <Floating className="pointer-events-auto flex max-w-full flex-wrap items-center gap-x1_5 px-x3 py-x2">
-                <span className="mr-x1 text-[0.8125rem] font-semibold">칸 색칠</span>
-                {doc.colors.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    aria-label={`색 ${c}`}
-                    aria-pressed={brushTool !== "eyedropper" && brushColor === c}
-                    onClick={() => {
-                      setBrushColor(c);
-                      if (brushTool === "eyedropper") setBrushTool("paint");
-                    }}
-                    className={cx(
-                      "size-7 rounded-full border border-black/10",
-                      brushTool !== "eyedropper" && brushColor === c && "ring-2 ring-stroke-neutral-contrast ring-offset-2",
-                    )}
-                    style={{ background: c }}
-                  />
-                ))}
-                <label className="relative flex size-7 cursor-pointer items-center justify-center rounded-full border border-dashed border-stroke-neutral-weak text-fg-neutral-muted hover:bg-bg-neutral-weak" title="직접 색 고르기">
-                  <Plus className="size-4" />
-                  <input
-                    type="color"
-                    aria-label="직접 색 고르기"
-                    className="absolute inset-0 cursor-pointer opacity-0"
-                    onChange={(e) => {
-                      const c = e.target.value;
-                      setBrushColor(c);
-                      if (brushTool === "eyedropper") setBrushTool("paint");
-                      if (!h.get().colors.includes(c)) h.set((d) => ({ ...d, colors: [...d.colors, c].slice(-16) }));
-                    }}
-                  />
-                </label>
-                <Sep />
-                <IconButton label="색 지우기" size="sm" active={brushTool !== "eyedropper" && brushColor === null} onClick={() => setBrushColor(null)}>
-                  <Eraser />
-                </IconButton>
-                <IconButton label="스포이트" size="sm" active={brushTool === "eyedropper"} onClick={() => setBrushTool((t) => (t === "eyedropper" ? "paint" : "eyedropper"))}>
-                  <Pipette />
-                </IconButton>
-                <IconButton label="올가미 채우기" size="sm" active={brushTool === "lasso"} onClick={() => setBrushTool((t) => (t === "lasso" ? "paint" : "lasso"))}>
-                  <Lasso />
-                </IconButton>
-              </Floating>
-            )}
-            <Floating className="pointer-events-auto flex items-center gap-x0_5 p-x1">
-              <div role="toolbar" aria-label="도구" className="flex items-center gap-x0_5">
-                {tools.map((t) => (
-                  <IconButton key={t.id} label={t.label} shortcut={t.key} active={mode === t.id} disabled={t.disabled} onClick={() => switchMode(mode === t.id && (t.id === "gridEdit" || t.id === "brush") ? "select" : t.id)}>
-                    {t.icon}
-                  </IconButton>
-                ))}
-              </div>
-              {sel && (
-                <>
-                  <Sep />
-                  <span className="px-x1 text-[0.75rem] font-semibold text-fg-neutral-muted tabular-nums">{`${rectW(sel)}×${rectH(sel)}`}</span>
-                </>
-              )}
-            </Floating>
           </div>
 
-          {/* zoom controls */}
-          <Floating className="absolute right-4 bottom-4 z-20 flex items-center gap-x0_5 p-x1">
-            <IconButton label="축소" size="sm" onClick={() => zoomAt(0.8)}>
-              <ZoomOut />
-            </IconButton>
-            <button
-              type="button"
-              aria-label="배율 초기화"
-              title="배율 초기화"
-              onClick={() => zoomAt(1 / view.zoom)}
-              className="h-8 w-12 rounded-r2 text-[0.75rem] font-semibold text-fg-neutral tabular-nums hover:bg-bg-neutral-weak"
-            >
-              {Math.round(view.zoom * 100)}%
-            </button>
-            <IconButton label="확대" size="sm" onClick={() => zoomAt(1.25)}>
-              <ZoomIn />
-            </IconButton>
-            <IconButton label="화면에 맞추기" shortcut="⇧1" size="sm" onClick={() => fit()}>
-              <Fit />
-            </IconButton>
-          </Floating>
+          {practice && (
+            <LessonTour
+              lesson={practice}
+              step={step}
+              progress={prog}
+              onStep={setStep}
+              onExit={() => {
+                toast(`${LESSONS.find((l) => l.id === practice)?.title} 레슨을 마쳤어요`);
+                onExitPractice?.();
+              }}
+            />
+          )}
+          {overlay}
         </div>
-
-        {!wide && (leftOpen || rightOpen) && (
-          <div
-            aria-hidden
-            className="absolute inset-0 z-[25] bg-black/10"
-            onPointerDown={() => {
-              setLeftOpen(false);
-              setRightOpen(false);
-            }}
-          />
-        )}
-        {(wide || rightOpen) && rightPanel}
       </div>
 
       <ContextMenu at={ctx} items={menuItems} onClose={() => setCtx(null)} />
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={onExport} />
+      <ShortcutDialog open={helpOpen} onClose={() => setHelpOpen(false)} groups={SHORTCUTS} />
 
       <Dialog
         open={!!saveMineOpen}
@@ -1555,7 +2085,6 @@ export default function KnitEditor({ work, data }: { work: Work; data: KnitData 
           )}
         </form>
       </Dialog>
-    </EditorShell>
+    </div>
   );
 }
-

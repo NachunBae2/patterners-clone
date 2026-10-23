@@ -1,17 +1,20 @@
 // SVG markup for knitting grids — shared by the live canvas, export and thumbnails.
 import { knitSymbol, symbolDefs, symbolSvg } from "@/lib/symbols/knitting";
-import { DEFAULT_NUMBERING, lightness, rowOwners, type Geo, type KDoc, type KGrid } from "./model";
+import { lightness, numberingOf, rowOwners, type Geo, type KDoc, type KGrid } from "./model";
 
 const f = (n: number) => Math.round(n * 100) / 100;
 export const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
-export const LINE = "#cfcfcf";
-export const LINE_BOLD = "#9a9a9a";
-export const NUM = "#707070";
-export const numFont = (geo: Geo) => Math.max(5, Math.min(geo.ch * 0.6, geo.cw * 0.46, 11));
+/** grid lines (tailwind neutral-400) and the selected grid's lines (amber-500) */
+export const LINE = "#a1a1a1";
+export const LINE_ACTIVE = "#fd9a00";
+export const NUM = "#8b8b8b";
+/** label box depth and font size, relative to the row height (28 → 15.4 / 10.64) */
+export const numBox = (geo: Geo) => geo.ch * 0.55;
+export const numFont = (geo: Geo) => geo.ch * 0.38;
 
 /** colour rects (merged per row run) */
-function colorMarkup(g: KGrid, geo: Geo) {
+export function colorMarkup(g: KGrid, geo: Geo) {
   let s = "";
   for (let r = 0; r < g.rows; r++) {
     let c = 0;
@@ -30,71 +33,108 @@ function colorMarkup(g: KGrid, geo: Geo) {
   return s;
 }
 
-function symbolMarkup(g: KGrid, geo: Geo, prefix: string) {
+export function symbolMarkup(g: KGrid, geo: Geo, prefix = "ks") {
   let s = "";
   for (let r = 0; r < g.rows; r++) {
     const owners = rowOwners(g, r);
     for (let c = 0; c < g.cols; c++) {
       if (owners[c] !== c) continue;
       const cell = g.cells[r * g.cols + c]!;
+      const sym = knitSymbol(cell.symbol);
+      if (!sym) continue;
       const dark = cell.color && lightness(cell.color) < 0.45;
-      const w = knitSymbol(cell.symbol)?.width ?? 1;
+      const w = Math.min(sym.width, g.cols - c);
       // wide symbols (cables) read as one merged cell: cover the inner grid lines
-      if (w > 1)
-        for (let k = 0; k < w && c + k < g.cols; k++) {
-          const x0 = (c + k) * geo.cw + (k === 0 ? 0.45 : -0.4);
-          const x1 = (c + k + 1) * geo.cw - (k === w - 1 ? 0.45 : -0.4);
+      if (sym.width > 1)
+        for (let k = 0; k < w; k++) {
+          const x0 = (c + k) * geo.cw + (k === 0 ? 0.5 : -0.5);
+          const x1 = (c + k + 1) * geo.cw - (k === w - 1 ? 0.5 : -0.5);
           const fill = g.cells[r * g.cols + c + k]?.color ?? "#fff";
-          s += `<rect x="${f(x0)}" y="${f(r * geo.ch + 0.45)}" width="${f(x1 - x0)}" height="${f(geo.ch - 0.9)}" fill="${fill}"/>`;
+          s += `<rect x="${f(x0)}" y="${f(r * geo.ch + 0.5)}" width="${f(x1 - x0)}" height="${f(geo.ch - 1)}" fill="${fill}"/>`;
         }
-      s += `<use href="#${prefix}-${cell.symbol}" x="${f(c * geo.cw)}" y="${f(r * geo.ch)}"${dark ? ' color="#fff"' : ""}/>`;
+      s += `<use href="#${prefix}-${sym.id}" x="${f(c * geo.cw)}" y="${f(r * geo.ch)}" width="${f(sym.width * geo.cw)}" height="${f(geo.ch)}"${dark ? ' color="#fff"' : ""}/>`;
     }
   }
   return s;
 }
 
-function lineMarkup(g: KGrid, geo: Geo) {
-  const W = g.cols * geo.cw;
-  const H = g.rows * geo.ch;
-  let thin = "";
-  let bold = "";
-  for (let c = 1; c < g.cols; c++) {
-    const d = `M${f(c * geo.cw)} 0V${f(H)}`;
-    // every 10th stitch counted from the right edge
-    if ((g.cols - c) % 10 === 0) bold += d;
-    else thin += d;
+/** which grid lines a wide symbol hides (so the line layer can skip them) */
+function coveredVerticals(g: KGrid) {
+  const hidden = new Set<string>();
+  for (let r = 0; r < g.rows; r++) {
+    const owners = rowOwners(g, r);
+    for (let c = 1; c < g.cols; c++) if (owners[c] >= 0 && owners[c] === owners[c - 1]) hidden.add(`${c},${r}`);
   }
-  for (let r = 1; r < g.rows; r++) {
-    const d = `M0 ${f(r * geo.ch)}H${f(W)}`;
-    if ((g.rows - r) % 10 === 0) bold += d;
-    else thin += d;
-  }
-  return (
-    `<path d="${thin}" stroke="${LINE}" stroke-width="0.6" fill="none"/>` + (bold ? `<path d="${bold}" stroke="${LINE_BOLD}" stroke-width="0.9" fill="none"/>` : "")
-  );
+  return hidden;
 }
 
-/** row numbers (right/left/alternating) and stitch numbers along the bottom, counted from the right */
-export function numberMarkup(g: KGrid, geo: Geo) {
-  const n = g.numbering ?? DEFAULT_NUMBERING;
-  const fs = numFont(geo);
+/** grid lines as individual segments in grid-local coords; `bold` = outer border of the selected grid */
+export function gridLines(g: KGrid, geo: Geo, active = false) {
   const W = g.cols * geo.cw;
   const H = g.rows * geo.ch;
-  const interval = n.alternate ? 1 : Math.max(1, n.interval);
+  const out: { x1: number; y1: number; x2: number; y2: number; w: number }[] = [];
+  for (let r = 0; r <= g.rows; r++) out.push({ x1: 0, y1: r * geo.ch, x2: W, y2: r * geo.ch, w: active && (r === 0 || r === g.rows) ? 2 : 1 });
+  const hidden = coveredVerticals(g);
+  for (let c = 0; c <= g.cols; c++) {
+    const x = c * geo.cw;
+    const edge = c === 0 || c === g.cols;
+    if (edge || !hidden.size) {
+      out.push({ x1: x, y1: 0, x2: x, y2: H, w: active && edge ? 2 : 1 });
+      continue;
+    }
+    // split the line where wide symbols cover it
+    let r0 = -1;
+    for (let r = 0; r <= g.rows; r++) {
+      const open = r < g.rows && !hidden.has(`${c},${r}`);
+      if (open && r0 < 0) r0 = r;
+      if (!open && r0 >= 0) {
+        out.push({ x1: x, y1: r0 * geo.ch, x2: x, y2: r * geo.ch, w: 1 });
+        r0 = -1;
+      }
+    }
+  }
+  return out;
+}
+
+export type NumLabel = { x: number; y: number; w: number; h: number; text: string };
+
+/** row / stitch numbers around a grid (grid-local coords): 1, every `interval`, and the last number */
+export function numberLabels(g: KGrid, geo: Geo): NumLabel[] {
+  const n = numberingOf(g.numbering);
+  const W = g.cols * geo.cw;
+  const H = g.rows * geo.ch;
+  const box = numBox(geo);
+  const off = n.offset;
+  const out: NumLabel[] = [];
+  const shown = (num: number, last: number, iv: number) => num === 1 || num === last || num % iv === 0;
+  const rowNum = (r: number) => (n.reverseRows ? g.rows - r : r + 1);
+  const colNum = (c: number) => (n.reverseCols ? g.cols - c : c + 1);
+  for (const side of ["bottom", "top"] as const) {
+    const iv = n[side];
+    if (iv <= 0) continue;
+    for (let c = 0; c < g.cols; c++) {
+      const num = colNum(c);
+      if (!shown(num, g.cols, iv)) continue;
+      out.push({ x: c * geo.cw, y: side === "bottom" ? H + off : -box - off, w: geo.cw, h: box, text: String(num) });
+    }
+  }
+  for (const side of ["right", "left"] as const) {
+    const iv = n[side];
+    if (iv <= 0) continue;
+    for (let r = 0; r < g.rows; r++) {
+      const num = rowNum(r);
+      if (!shown(num, g.rows, iv)) continue;
+      out.push({ x: side === "right" ? W + off : -box - off, y: r * geo.ch, w: box, h: geo.ch, text: String(num) });
+    }
+  }
+  return out;
+}
+
+export function numberMarkup(g: KGrid, geo: Geo) {
+  const fs = numFont(geo);
   let s = `<g font-family="Pretendard, Arial, sans-serif" font-size="${f(fs)}" fill="${NUM}">`;
-  for (let r = 0; r < g.rows; r++) {
-    const num = g.rows - r;
-    if (num !== 1 && num % interval) continue;
-    const side = n.alternate ? (num % 2 ? "right" : "left") : n.side;
-    const x = side === "right" ? W + fs * 0.45 : -fs * 0.45;
-    s += `<text x="${f(x)}" y="${f(r * geo.ch + geo.ch / 2)}" dominant-baseline="central" text-anchor="${side === "right" ? "start" : "end"}">${num}</text>`;
-  }
-  const colInterval = Math.max(1, n.interval);
-  for (let c = 0; c < g.cols; c++) {
-    const num = g.cols - c;
-    if (num !== 1 && num % colInterval) continue;
-    s += `<text x="${f(c * geo.cw + geo.cw / 2)}" y="${f(H + fs * 0.35)}" dominant-baseline="hanging" text-anchor="middle">${num}</text>`;
-  }
+  for (const l of numberLabels(g, geo))
+    s += `<text x="${f(l.x + l.w / 2)}" y="${f(l.y + l.h / 2)}" text-anchor="middle" dominant-baseline="central">${l.text}</text>`;
   return s + "</g>";
 }
 
@@ -106,10 +146,13 @@ export function gridBody(g: KGrid, geo: Geo, prefix = "ks", opts: { cells?: bool
   if (opts.cells !== false) {
     s += `<rect x="0" y="0" width="${f(W)}" height="${f(H)}" fill="#fff"/>`;
     s += colorMarkup(g, geo);
+    s += `<svg x="0" y="0" width="${f(W)}" height="${f(H)}" overflow="hidden"><g color="#222">${symbolMarkup(g, geo, prefix)}</g></svg>`;
   }
-  if (opts.lines !== false) s += lineMarkup(g, geo);
-  if (opts.cells !== false) s += `<svg x="0" y="0" width="${f(W)}" height="${f(H)}" overflow="hidden"><g color="#222">${symbolMarkup(g, geo, prefix)}</g></svg>`;
-  if (opts.lines !== false) s += `<rect x="0" y="0" width="${f(W)}" height="${f(H)}" fill="none" stroke="#6b6b6b" stroke-width="1"/>`;
+  if (opts.lines !== false) {
+    let d = "";
+    for (const l of gridLines(g, geo)) d += `M${f(l.x1)} ${f(l.y1)}${l.x1 === l.x2 ? `V${f(l.y2)}` : `H${f(l.x2)}`}`;
+    s += `<path d="${d}" stroke="${LINE}" stroke-width="1" fill="none" shape-rendering="crispEdges"/>`;
+  }
   return s;
 }
 
@@ -121,8 +164,8 @@ export function usedSymbols(grids: KGrid[]) {
 
 /** Extra space a grid needs around it for numbers and its name label. */
 export function gridPad(geo: Geo) {
-  const fs = numFont(geo);
-  return { left: fs * 2.6, right: fs * 2.6, top: fs * 2.2, bottom: fs * 1.8 };
+  const b = numBox(geo) + 6;
+  return { left: b, right: b, top: numFont(geo) * 2.4, bottom: b };
 }
 
 /** Standalone SVG of the visible grids, tight bounds + 24px margin. */
@@ -151,14 +194,14 @@ export function buildSvg(doc: KDoc, geo: Geo, opts: { numbers?: boolean; labels?
   let body = "";
   for (const g of grids) {
     body += `<g transform="translate(${f(g.x - x0 + M)} ${f(g.y - y0 + M)})">`;
-    if (opts.labels) body += `<text x="0" y="${f(-fs * 0.8)}" font-family="Pretendard, Arial, sans-serif" font-size="${f(fs * 1.1)}" font-weight="600" fill="#333">${esc(g.name)}</text>`;
+    if (opts.labels) body += `<text x="0" y="${f(-fs * 0.9)}" font-family="Pretendard, Arial, sans-serif" font-size="${f(fs * 1.15)}" font-weight="600" fill="#333">${esc(g.name)}</text>`;
     body += gridBody(g, geo);
     if (numbers) body += numberMarkup(g, geo);
     body += "</g>";
   }
   if (opts.legend) {
     let y = y1 - y0 + M + fs * 1.6;
-    body += `<text x="${M}" y="${f(y)}" font-family="Pretendard, Arial, sans-serif" font-size="${f(fs)}" fill="#555">게이지: 10cm = ${doc.gauge.sts}코 × ${doc.gauge.rows}단</text>`;
+    if (doc.gaugeOn) body += `<text x="${M}" y="${f(y)}" font-family="Pretendard, Arial, sans-serif" font-size="${f(fs)}" fill="#555">게이지: 10cm = ${doc.gauge.sts}코 × ${doc.gauge.rows}단</text>`;
     let x = M;
     y += fs * 1.9;
     let i = 1;
@@ -228,7 +271,7 @@ function symbolImage(id: string, cw: number, ch: number, color: string) {
  * Draws cells + lines of a large grid into `canvas` (up to 2px per world unit, max 4096px a side).
  * `current()` lets a newer draw cancel an older one that is still waiting for symbol bitmaps.
  */
-export async function drawGridCanvas(canvas: HTMLCanvasElement, g: KGrid, geo: Geo, current: () => boolean = () => true) {
+export async function drawGridCanvas(canvas: HTMLCanvasElement, g: KGrid, geo: Geo, current: () => boolean = () => true, lineColor = LINE) {
   const W = g.cols * geo.cw;
   const H = g.rows * geo.ch;
   const scale = Math.min(2, 4096 / W, 4096 / H);
@@ -241,7 +284,7 @@ export async function drawGridCanvas(canvas: HTMLCanvasElement, g: KGrid, geo: G
       const cell = g.cells[r * g.cols + c];
       const sym = knitSymbol(cell?.symbol);
       if (!cell?.symbol || !sym) continue;
-      jobs.push({ id: cell.symbol, c, r, color: cell.color && lightness(cell.color) < 0.45 ? "#fff" : "#222", w: sym.width });
+      jobs.push({ id: sym.id, c, r, color: cell.color && lightness(cell.color) < 0.45 ? "#fff" : "#222", w: sym.width });
     }
   }
   // symbol bitmaps at device scale; collected before touching the canvas so the old frame stays meanwhile
@@ -273,38 +316,29 @@ export async function drawGridCanvas(canvas: HTMLCanvasElement, g: KGrid, geo: G
       ctx.fillStyle = col;
       ctx.fillRect(c * geo.cw, r * geo.ch, geo.cw + 0.3, geo.ch + 0.3);
     }
-  const stroke = (color: string, width: number, every: number) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
-    ctx.beginPath();
-    for (let c = 1; c < g.cols; c++)
-      if (every === 1 ? (g.cols - c) % 10 !== 0 : (g.cols - c) % 10 === 0) {
-        ctx.moveTo(c * geo.cw, 0);
-        ctx.lineTo(c * geo.cw, H);
-      }
-    for (let r = 1; r < g.rows; r++)
-      if (every === 1 ? (g.rows - r) % 10 !== 0 : (g.rows - r) % 10 === 0) {
-        ctx.moveTo(0, r * geo.ch);
-        ctx.lineTo(W, r * geo.ch);
-      }
-    ctx.stroke();
-  };
-  stroke(LINE, 0.6, 1);
-  stroke(LINE_BOLD, 0.9, 10);
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 1 / scale;
+  ctx.beginPath();
+  for (let c = 0; c <= g.cols; c++) {
+    ctx.moveTo(c * geo.cw, 0);
+    ctx.lineTo(c * geo.cw, H);
+  }
+  for (let r = 0; r <= g.rows; r++) {
+    ctx.moveTo(0, r * geo.ch);
+    ctx.lineTo(W, r * geo.ch);
+  }
+  ctx.stroke();
   for (const j of jobs) {
     const x = j.c * geo.cw;
     const y = j.r * geo.ch;
     if (j.w > 1)
       for (let k = 0; k < j.w && j.c + k < g.cols; k++) {
-        const x0 = (j.c + k) * geo.cw + (k === 0 ? 0.45 : -0.4);
-        const x1 = (j.c + k + 1) * geo.cw - (k === j.w - 1 ? 0.45 : -0.4);
+        const x0 = (j.c + k) * geo.cw + (k === 0 ? 0.5 : -0.5);
+        const x1 = (j.c + k + 1) * geo.cw - (k === j.w - 1 ? 0.5 : -0.5);
         ctx.fillStyle = g.cells[j.r * g.cols + j.c + k]?.color ?? "#fff";
-        ctx.fillRect(x0, y + 0.45, x1 - x0, geo.ch - 0.9);
+        ctx.fillRect(x0, y + 0.5, x1 - x0, geo.ch - 1);
       }
     const img = imgs.get(`${j.id}|${j.color}`);
     if (img) ctx.drawImage(img, x, y, img.width / scale, img.height / scale);
   }
-  ctx.strokeStyle = "#6b6b6b";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0, 0, W, H);
 }
