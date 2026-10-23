@@ -5,6 +5,7 @@ import type { GridMode, GridPage, View } from "@/lib/types";
 import {
   type Block,
   type FloatRun,
+  type Numbering,
   type Rect,
   clamp,
   clipRect,
@@ -26,8 +27,7 @@ type Props = {
   mode: GridMode;
   aspect: number;
   safe: { sts: number; rows: number };
-  working: "flat" | "round";
-  hand: "right" | "left";
+  numbering: Numbering;
   floats: FloatRun[] | null;
   view: View;
   setView: (v: View | ((v: View) => View)) => void;
@@ -43,7 +43,11 @@ type Props = {
   commit: (p: GridPage, merge: boolean) => void;
   onPick: (v: number) => void;
   onSize: (s: { w: number; h: number }) => void;
+  /** Grows (+) or crops (−) the page on one side, live while dragging an edge handle. */
+  onEdge: (side: Side, n: number, base: GridPage) => void;
 };
+
+type Side = "left" | "right" | "top" | "bottom";
 
 type Drag =
   | { kind: "pan"; sx: number; sy: number; view: View }
@@ -100,8 +104,7 @@ export function GridCanvas(p: Props) {
         mode: p.mode,
         aspect: p.aspect,
         safe: p.safe,
-        working: p.working,
-        hand: p.hand,
+        numbering: p.numbering,
         floats: p.floats,
         hover: p.hover,
         sel: p.sel,
@@ -148,7 +151,7 @@ export function GridCanvas(p: Props) {
 
   // wheel: scroll pans, ⌘/Ctrl (and pinch) zooms around the pointer
   useEffect(() => {
-    const el = cvRef.current!;
+    const el = wrapRef.current!; // includes the edge handles
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -295,15 +298,78 @@ export function GridCanvas(p: Props) {
             : "default"
           : p.tool === "pick"
             ? "copy"
-            : "crosshair";
+            : "cell";
+
+  const cw = CELL * p.view.zoom;
+  const ch = CELL * p.aspect * p.view.zoom;
+  const W = p.page.cols * cw;
+  const H = p.page.rows * ch;
+  const edge = useRef<{ side: Side; start: number; base: GridPage; n: number } | null>(null);
+  const edgeDown = (side: Side) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    props.current.checkpoint();
+    edge.current = { side, start: side === "left" || side === "right" ? e.clientX : e.clientY, base: props.current.page, n: 0 };
+  };
+  const edgeMove = (e: React.PointerEvent) => {
+    const d = edge.current;
+    if (!d) return;
+    const horiz = d.side === "left" || d.side === "right";
+    const delta = (horiz ? e.clientX : e.clientY) - d.start;
+    const out = d.side === "left" || d.side === "top" ? -delta : delta;
+    const n = Math.round(out / (horiz ? cw : ch));
+    if (n === d.n) return;
+    d.n = n;
+    props.current.onEdge(d.side, n, d.base);
+  };
+  const edgeUp = () => (edge.current = null);
+  const handle = (side: Side, style: React.CSSProperties) => {
+    const v = side === "left" || side === "right";
+    return (
+      <div
+        key={side}
+        data-grid-edge={side}
+        onPointerDown={edgeDown(side)}
+        onPointerMove={edgeMove}
+        onPointerUp={edgeUp}
+        onPointerCancel={edgeUp}
+        title={v ? "끌어서 코 수 바꾸기" : "끌어서 단 수 바꾸기"}
+        className={
+          v
+            ? `group absolute z-10 flex cursor-ew-resize items-center ${side === "left" ? "justify-start" : "justify-end"}`
+            : `group absolute z-10 flex cursor-ns-resize justify-center ${side === "top" ? "items-start" : "items-end"}`
+        }
+        style={style}
+      >
+        <span
+          aria-hidden="true"
+          className={`flex items-center justify-center gap-0.5 rounded-full border border-stroke-neutral-muted bg-bg-layer-floating text-fg-neutral-muted shadow-s2 transition-colors group-hover:border-stroke-brand-solid group-hover:bg-bg-brand-solid group-hover:text-fg-neutral-inverted m-0.5 ${v ? "h-12 w-3 flex-col" : "h-3 w-12"}`}
+        >
+          <span className="size-[3px] rounded-full bg-current" />
+          <span className="size-[3px] rounded-full bg-current" />
+          <span className="size-[3px] rounded-full bg-current" />
+        </span>
+      </div>
+    );
+  };
 
   return (
-    <div ref={wrapRef} className="absolute inset-0 overflow-hidden" style={{ backgroundImage: "radial-gradient(rgba(0,0,0,0.09) 1px, transparent 1px)", backgroundSize: "20px 20px" }}>
+    <div
+      ref={wrapRef}
+      data-canvas-surface="true"
+      className="relative h-full w-full touch-none select-none overflow-hidden bg-bg-layer-default"
+      style={{
+        cursor,
+        backgroundImage: "radial-gradient(oklch(0.78 0.01 260 / 0.35) 1px, transparent 1px)",
+        backgroundSize: "20px 20px",
+        backgroundPosition: `${p.view.x}px ${p.view.y}px`,
+      }}
+    >
       <canvas
         ref={cvRef}
         aria-label="배색 도안 격자"
-        className="absolute inset-0 block size-full touch-none"
-        style={{ cursor }}
+        className="absolute inset-0 block h-full w-full"
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -312,6 +378,14 @@ export function GridCanvas(p: Props) {
         onContextMenu={(e) => e.preventDefault()}
         onAuxClick={(e) => e.preventDefault()}
       />
+      {size.w > 0 && (
+        <>
+          {handle("left", { left: p.view.x - 34, top: p.view.y, width: 34, height: H })}
+          {handle("right", { left: p.view.x + W, top: p.view.y, width: 34, height: H })}
+          {handle("top", { left: p.view.x, top: p.view.y - 34, width: W, height: 34 })}
+          {handle("bottom", { left: p.view.x, top: p.view.y + H, width: W, height: 34 })}
+        </>
+      )}
     </div>
   );
 }

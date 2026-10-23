@@ -10,8 +10,103 @@ export type GridExtra = {
   floatLimit?: number;
   showFloats?: boolean;
   exportGauge?: boolean;
+  /** 단수 표시: number interval per side (0 = hidden) and ordering. */
+  numbering?: Numbering;
+  /** 게이지 estimator inputs (yarn / needle thickness in mm, tension). */
+  gaugeTool?: { yarn: number; needle: number; tension: Tension };
+  /** 안전구역 switch; `safe` keeps the margin sizes. */
+  safeOn?: boolean;
 };
 export type GridDoc = GridData & GridExtra;
+
+export type Tension = "loose" | "normal" | "tight";
+export type Numbering = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  /** 번갈아 표시: row numbers alternate sides (flat knitting). */
+  alternate: boolean;
+  /** 단 순서 뒤집기: row 1 is the bottom row. */
+  flipRows: boolean;
+  /** 코 순서 뒤집기: stitch 1 is the right-most stitch. */
+  flipSts: boolean;
+  /** 도안과 거리: extra gap between numbers and chart, in px. */
+  offset: number;
+};
+
+export const DEFAULT_NUMBERING: Numbering = { left: 1, top: 0, right: 1, bottom: 1, alternate: true, flipRows: true, flipSts: true, offset: 0 };
+export const DEFAULT_GAUGE_TOOL = { yarn: 4, needle: 4.75, tension: "normal" as Tension };
+
+/** Numbering for a doc, derived from the legacy working/hand fields when unset. */
+export function numberingOf(d: GridDoc): Numbering {
+  if (d.numbering) return d.numbering;
+  return { ...DEFAULT_NUMBERING, alternate: (d.working ?? "flat") === "flat", flipSts: (d.hand ?? "right") === "right" };
+}
+
+export const rowNoOf = (r: number, rows: number, n: Numbering) => (n.flipRows ? rows - r : r + 1);
+export const stNoOf = (c: number, cols: number, n: Numbering) => (n.flipSts ? cols - c : c + 1);
+
+/** Sides on which row number `no` is printed. */
+export function rowSides(no: number, n: Numbering): ("left" | "right")[] {
+  if (n.alternate) {
+    const first = n.flipSts ? "right" : "left";
+    return [no % 2 === 1 ? first : first === "right" ? "left" : "right"];
+  }
+  const out: ("left" | "right")[] = [];
+  if (n.left > 0 && (no % n.left === 0 || no === 1)) out.push("left");
+  if (n.right > 0 && (no % n.right === 0 || no === 1)) out.push("right");
+  return out;
+}
+
+/** Rough gauge from yarn/needle thickness (mm) and hand tension. */
+export function estimateGauge(t: { yarn: number; needle: number; tension: Tension }) {
+  const k = t.tension === "loose" ? 1.08 : t.tension === "tight" ? 0.93 : 1;
+  const size = (t.needle * 0.8 + t.yarn * 0.2) * k; // effective stitch size, mm
+  const sts = clamp(Math.round(100 / (size * 1.087)), 4, 80);
+  const rows = clamp(Math.round(100 / (size * 0.988)), 4, 120);
+  return { sts, rows };
+}
+
+/** Nearest-neighbour rescale of a page's pattern to a new size. */
+export function scalePage(p: GridPage, cols: number, rows: number): GridPage {
+  cols = clamp(Math.round(cols), 1, MAX_DIM);
+  rows = clamp(Math.round(rows), 1, MAX_DIM);
+  const cells = new Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const sr = Math.min(p.rows - 1, Math.floor(((r + 0.5) * p.rows) / rows));
+    for (let c = 0; c < cols; c++) {
+      const sc = Math.min(p.cols - 1, Math.floor(((c + 0.5) * p.cols) / cols));
+      cells[r * cols + c] = p.cells[sr * p.cols + sc];
+    }
+  }
+  return { ...p, cols, rows, cells };
+}
+
+/** Written (서술형) instructions: one line per row, colour runs in working order. */
+export function writtenRows(p: GridPage, names: (v: number) => string, n: Numbering): string[] {
+  const out: string[] = [];
+  for (let k = 1; k <= p.rows; k++) {
+    const r = n.flipRows ? p.rows - k : k - 1;
+    const rightToLeft = n.alternate ? (k % 2 === 1) === n.flipSts : n.flipSts;
+    const runs: string[] = [];
+    let prev: number | null = null;
+    let len = 0;
+    for (let i = 0; i < p.cols; i++) {
+      const c = rightToLeft ? p.cols - 1 - i : i;
+      const v = eff(p.cells[r * p.cols + c]);
+      if (v === prev) len++;
+      else {
+        if (prev !== null) runs.push(`${names(prev)} ${len}`);
+        prev = v;
+        len = 1;
+      }
+    }
+    if (prev !== null) runs.push(`${names(prev)} ${len}`);
+    out.push(`${k}단: ${runs.join(", ")}`);
+  }
+  return out;
+}
 
 export const MAX_DIM = 300;
 export const MAX_COLORS = 12;
