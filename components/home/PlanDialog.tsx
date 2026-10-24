@@ -97,7 +97,7 @@ export function PlanDialog({ open, onClose, onContact }: { open: boolean; onClos
           </li>
         ))}
       </ul>
-      <p className="mt-x3 t2-regular text-fg-neutral-subtle">* 결제 기능은 준비 중이에요. 이 사본에는 결제 기능이 없어요.</p>
+      <p className="mt-x3 t2-regular text-fg-neutral-subtle">* 이 사본에는 결제 기능이 없어요. 요금제는 비교용으로만 보여 드려요.</p>
     </Dialog>
   );
 }

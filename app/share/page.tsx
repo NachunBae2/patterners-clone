@@ -8,6 +8,7 @@ import { LocalNote, Tag } from "@/components/app/form";
 import { WorkPreview, workFacts } from "@/components/app/WorkPreview";
 import { Wordmark } from "@/components/Wordmark";
 import { notifications } from "@/lib/notifications";
+import { clones, sourceKey } from "@/lib/clones";
 import { decodeShare, type SharedWork } from "@/lib/share";
 import { works } from "@/lib/store";
 import { CRAFT_LABEL, type GridData } from "@/lib/types";
@@ -18,9 +19,18 @@ export default function SharePage() {
   const toast = useToast();
   const router = useRouter();
   const [shared, setShared] = useState<SharedWork | null | undefined>(undefined);
+  const [key, setKey] = useState("");
+  /** the copy already made from this link (pressing again opens it instead of duplicating) */
+  const [copyId, setCopyId] = useState<string | null>(null);
 
   useEffect(() => {
-    const load = () => decodeShare(window.location.hash).then(setShared);
+    const load = () =>
+      decodeShare(window.location.hash).then((s) => {
+        const k = sourceKey("share", window.location.hash.replace(/^#/, ""));
+        setShared(s);
+        setKey(k);
+        setCopyId(s ? clones.get(k) : null);
+      });
     load();
     window.addEventListener("hashchange", load);
     return () => window.removeEventListener("hashchange", load);
@@ -28,12 +38,17 @@ export default function SharePage() {
 
   const clone = () => {
     if (!shared) return;
+    const existing = clones.get(key);
+    if (existing) return router.push(`/maker/${existing}`);
     const w = works.create(shared.craft, `${shared.title} (사본)`, structuredClone(shared.data));
     try {
       works.update(w.id, { thumbnail: workThumb(shared.craft, shared.data) });
     } catch {}
+    clones.set(key, w.id);
+    setCopyId(w.id);
     notifications.add({ kind: "share_import", title: `공유받은 ‘${shared.title}’ 도안을 내 도안으로 복제했어요`, href: `/maker/${w.id}` });
-    toast("내 도안으로 복제했어요", { label: "열기", run: () => router.push(`/maker/${w.id}`) });
+    toast("내 도안으로 복제했어요");
+    router.push(`/maker/${w.id}`);
   };
 
   let yarns: string[] = [];
@@ -77,9 +92,12 @@ export default function SharePage() {
                 <h1 className="mt-x2 t7-bold break-keep">{shared.title}</h1>
                 <p className="mt-x1 t2-regular text-fg-neutral-subtle">{new Date(shared.at).toLocaleDateString("ko-KR")}에 공유한 도안</p>
               </div>
-              <Button variant="primary" onClick={clone}>
-                내 도안으로 복제
-              </Button>
+              <div className="flex flex-col gap-x1_5">
+                <Button variant="primary" onClick={clone}>
+                  {copyId ? "복제됨 · 열기" : "내 도안으로 복제"}
+                </Button>
+                {copyId && <p className="t2-regular text-fg-neutral-subtle">이 링크는 이미 내 도안에 복제했어요. 누르면 그 사본을 열어요.</p>}
+              </div>
               <dl className="flex flex-col gap-x2 border-t border-stroke-neutral-muted pt-x4">
                 {workFacts(shared.craft, shared.data).map((f) => (
                   <div key={f.label} className="flex justify-between gap-x3 t3-regular">

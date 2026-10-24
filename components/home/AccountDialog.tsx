@@ -126,7 +126,7 @@ export function AccountDialog({ open, onClose }: { open: boolean; onClose: () =>
               maxLength={24}
               onChange={(e) => setNickname(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && save()}
-              placeholder="예: Hyangrim lee"
+              placeholder="예: 뜨개하는 곰"
               className={inputCls}
             />
           </Field>

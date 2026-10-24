@@ -187,6 +187,10 @@ export default function HomePage() {
     window.history.replaceState(null, "", v === "all" ? "/home" : `/home?tab=${v}`);
   };
 
+  // A native <dialog> fires "close" after the next one opened (e.g. 플랜 → 문의하기),
+  // so only clear the state when it still points at the dialog that closed.
+  const closeDialog = (which: NonNullable<typeof dialog>) => setDialog((d) => (d === which ? null : d));
+
   const openNotices = (id: string | null) => {
     setNavOpen(false);
     setNoticeId(id);
@@ -397,10 +401,10 @@ export default function HomePage() {
 
       <RenameDialog entry={renaming} onClose={() => setRenaming(null)} />
       <SpotlightTour open={tour} steps={HOME_TOUR} onClose={closeTour} />
-      <NoticesDialog open={dialog === "notices"} openId={noticeId} onOpenId={setNoticeId} onClose={() => setDialog(null)} />
-      <ContactDialog open={dialog === "contact"} onClose={() => setDialog(null)} />
-      <PlanDialog open={dialog === "plan"} onClose={() => setDialog(null)} onContact={() => setDialog("contact")} />
-      <AccountDialog open={dialog === "account"} onClose={() => setDialog(null)} />
+      <NoticesDialog open={dialog === "notices"} openId={noticeId} onOpenId={setNoticeId} onClose={() => closeDialog("notices")} />
+      <ContactDialog open={dialog === "contact"} onClose={() => closeDialog("contact")} />
+      <PlanDialog open={dialog === "plan"} onClose={() => closeDialog("plan")} onContact={() => setDialog("contact")} />
+      <AccountDialog open={dialog === "account"} onClose={() => closeDialog("account")} />
       <HelpChat open={help} onClose={() => setHelp(false)} onAction={onAction} />
     </div>
   );
