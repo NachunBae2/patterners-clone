@@ -1,6 +1,6 @@
 // Document model for every work ("도안") kept in the browser.
 
-export type Craft = "crochet" | "knitting" | "grid";
+export type Craft = "crochet" | "knitting" | "grid" | "apparel" | "paper";
 
 export type View = { x: number; y: number; zoom: number };
 
@@ -121,7 +121,75 @@ export type GridData = {
   gauge: { sts: number; rows: number };
 };
 
-export type WorkData = CrochetData | KnitData | GridData;
+// ---------- 의류 도안 (garment pattern from measurements) ----------
+
+export type ApparelStyle = "setIn" | "dropShoulder" | "vest" | "raglan";
+export type ApparelFit = "slim" | "regular" | "over";
+export type ApparelSize = "S" | "M" | "L" | "XL";
+export type ApparelPiece = "back" | "front" | "sleeve";
+
+/** Body measurements in cm (before ease). */
+export type ApparelMeasure = {
+  bust: number;
+  bodyLength: number;
+  shoulderWidth: number;
+  armholeDepth: number;
+  sleeveLength: number;
+  upperArm: number;
+  cuffWidth: number;
+  neckWidth: number;
+  frontNeckDepth: number;
+  backNeckDepth: number;
+  shoulderDrop: number;
+  hemRib: number;
+  cuffRib: number;
+};
+
+export type ApparelData = {
+  style: ApparelStyle;
+  cardigan: boolean;
+  neckline: "round" | "v";
+  craft: "knit" | "crochet";
+  size: ApparelSize;
+  fit: ApparelFit;
+  measure: ApparelMeasure;
+  /** cm added to the body measurement */
+  ease: { bust: number; armhole: number; upperArm: number };
+  gauge: { sts: number; rows: number }; // per 10cm
+  bandWidth: number; // cardigan front band, cm
+  buttons: number;
+  showDims: boolean;
+  /** another work's thumbnail laid over a piece */
+  overlay?: { workId: string; piece: ApparelPiece; x: number; y: number; scale: number; opacity: number } | null;
+};
+
+// ---------- 페이퍼 (pattern write-up document) ----------
+
+export type PaperBorder = { style: "solid" | "dashed" | "dotted" | "double" | "none"; width: number; color: string };
+
+export type PaperBlock =
+  | { id: string; type: "heading"; level: 1 | 2 | 3; text: string; align?: "left" | "center" | "right" }
+  | { id: string; type: "paragraph"; text: string; align?: "left" | "center" | "right" }
+  | { id: string; type: "list"; ordered: boolean; items: string[] }
+  | {
+      id: string;
+      type: "table";
+      header: boolean;
+      rows: string[][];
+      preset: "basic" | "outerBold" | "rowsOnly" | "header" | "none";
+      border: PaperBorder;
+    }
+  | { id: string; type: "image"; src: string; caption: string; width: number; name?: string }
+  | { id: string; type: "divider" }
+  | { id: string; type: "embed"; workId: string; caption: string; width: number };
+
+export type PaperData = {
+  blocks: PaperBlock[];
+  /** show the document title at the top of the page */
+  showTitle: boolean;
+};
+
+export type WorkData = CrochetData | KnitData | GridData | ApparelData | PaperData;
 
 export type Work = {
   id: string;
@@ -140,4 +208,6 @@ export const CRAFT_LABEL: Record<Craft, string> = {
   crochet: "코바늘",
   knitting: "대바늘",
   grid: "배색·방안",
+  apparel: "의류",
+  paper: "페이퍼",
 };

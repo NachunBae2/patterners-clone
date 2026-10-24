@@ -32,8 +32,8 @@ export const NAV: { id: HomeView; label: string; Icon: IconC; cls: string; ready
   { id: "crochet", label: "코바늘 도안", Icon: CrochetGlyph, cls: `size-4 ${PREFIX}`, ready: true },
   { id: "knitting", label: "대바늘 도안", Icon: KnittingGlyph, cls: `size-4 ${PREFIX}`, ready: true },
   { id: "grid", label: "배색·방안 도안", Icon: GridGlyph, cls: `size-4 ${PREFIX}`, ready: true },
-  { id: "apparel", label: "의류 도안 (beta)", Icon: ApparelGlyph, cls: `size-4 ${PREFIX}`, ready: false },
-  { id: "papers", label: "페이퍼", Icon: PaperGlyph, cls: `size-4 ${PREFIX}`, ready: false },
+  { id: "apparel", label: "의류 도안 (beta)", Icon: ApparelGlyph, cls: `size-4 ${PREFIX}`, ready: true },
+  { id: "papers", label: "페이퍼", Icon: PaperGlyph, cls: `size-4 ${PREFIX}`, ready: true },
   { id: "trash", label: "휴지통", Icon: TrashIcon, cls: PREFIX, ready: true },
 ];
 
