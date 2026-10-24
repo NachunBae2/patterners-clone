@@ -7,9 +7,29 @@ import { ContextMenu, Dialog, Button, Menu, cx, isMod, useHotkeys, useToast, typ
 import { exportSvg, safeName, svgThumbnail } from "@/lib/export";
 import { uid } from "@/lib/id";
 import { works } from "@/lib/store";
-import { BLANK_ID, ERASE_ID, canonicalSymbol, knitSymbol, symbolDefs } from "@/lib/symbols/knitting";
-import type { KnitData, View, Work } from "@/lib/types";
+import {
+  BLANK_ID,
+  ERASE_ID,
+  canonicalSymbol,
+  customGlyphIds,
+  customGlyphOf,
+  isCatalogSymbol,
+  isCustomSymbol,
+  knitSymbol,
+  registerCustomGlyphs,
+  symbolDefs,
+  type CustomGlyph,
+} from "@/lib/symbols/knitting";
+import type { KnitData, View, Work, WorkData } from "@/lib/types";
 import { useHistory } from "@/lib/useHistory";
+import type { Version } from "@/lib/versions";
+import { KnitPreviewWindow } from "@/components/editor/common/KnitPreview";
+import { AssistantPanel, type ChatMsg } from "./AssistantPanel";
+import { interpret } from "./assistant";
+import { GlyphEditor, type MyGlyph } from "./GlyphEditor";
+import { HistoryDialog } from "./HistoryDialog";
+import { ImportDialog } from "./ImportDialog";
+import { gridToFabric } from "./realize";
 import { AB_TAIL, ab, seedSize } from "./ab";
 import { useKnitAutosave } from "./autosave";
 import { ExportDialog, ShortcutDialog, type ShortcutGroup } from "./Dialogs";
@@ -72,6 +92,7 @@ import {
   type Block,
   type Geo,
   type KDoc,
+  type KFolder,
   type KGrid,
   type Rect,
   type Sel,
@@ -101,6 +122,8 @@ type Drag =
   | { kind: "carve"; gridId: string; last: Cell; remove: boolean; cp: boolean };
 
 const MY_KEY = "pt:knit:myPatterns";
+const GLYPH_KEY = "pt:knit:myGlyphs";
+const GLYPH_MAX = 60;
 const CLIP_KEY = "pt:knit:clipboard";
 const MY_MAX = 60;
 /** canvas margins used when framing grids (matches the reference fit: 48px sides, 66px bottom chrome) */
@@ -117,8 +140,21 @@ const readMine = (): MyPattern[] => {
   }
 };
 
+const readGlyphs = (): MyGlyph[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(GLYPH_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((g) => g && typeof g.id === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
 function normalize(d: KnitData & Partial<KDoc>): KDoc {
+  // user-drawn symbols travel with the document
+  registerCustomGlyphs(d.glyphs);
+  const folders = Array.isArray(d.folders) ? d.folders : undefined;
   return {
+    ...(folders?.length ? { folders } : {}),
     grids: (d.grids ?? []).map((g) => ({
       ...g,
       cells:
@@ -133,6 +169,19 @@ function normalize(d: KnitData & Partial<KDoc>): KDoc {
     bg: d.bg,
     view: d.view ?? { x: 0, y: 0, zoom: 1 },
   };
+}
+
+/** copies the user-drawn symbols a document uses into it, so the saved chart renders anywhere */
+function withGlyphs<T extends { grids: KGrid[] }>(d: T): T & { glyphs?: CustomGlyph[] } {
+  const ids = new Set<string>();
+  for (const g of d.grids) for (const c of g.cells) if (c?.symbol && isCustomSymbol(c.symbol)) ids.add(c.symbol);
+  const glyphs = [...ids].map(customGlyphOf).filter((g): g is CustomGlyph => !!g);
+  if (!glyphs.length) {
+    if (!("glyphs" in d)) return d;
+    const { glyphs: _drop, ...rest } = d as T & { glyphs?: CustomGlyph[] };
+    return rest as T;
+  }
+  return { ...d, glyphs };
 }
 
 const SHORTCUTS: ShortcutGroup[] = [
@@ -452,7 +501,6 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
   const h = useHistory<KDoc>(initial);
   const doc = h.state;
   const toast = useToast();
-  const soon = () => toast("준비 중이에요");
 
   const [view, setView] = useState<View>(initial.view);
   const viewRef = useRef(view);
@@ -470,7 +518,7 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
   const [mode, setMode] = useState<Mode>(practice === "gridEdit" ? "gridEdit" : practice === "grid" ? "grid" : practice === "modes" ? "brush" : "select");
   const [pick, setPick] = useState<string | null>(null);
   const [stamp, setStamp] = useState<Stamp | null>(null);
-  const [tab, setTab] = useState<LeftTab>("symbols");
+  const [tab, setTab] = useState<LeftTab | "assistant">("symbols");
   const [paletteOpen, setPaletteOpen] = useState(true);
   const [paletteW, setPaletteW] = useState(PALETTE_W);
   const [sel, setSel] = useState<Sel | null>(null);
@@ -491,6 +539,15 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
   const [pillOpen, setPillOpen] = useState(true);
   const [tracker, setTracker] = useState<{ on: boolean; row: number }>({ on: false, row: 1 });
   const [title, setTitle] = useState(work.title);
+  const [importOpen, setImportOpen] = useState(false);
+  const [realizeOpen, setRealizeOpen] = useState(false);
+  const [yarn, setYarn] = useState("#e9e2d2");
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [glyphs, setGlyphs] = useState<MyGlyph[]>([]);
+  const [glyphEdit, setGlyphEdit] = useState<{ initial: MyGlyph | null } | null>(null);
+  const [glyphDelete, setGlyphDelete] = useState<MyGlyph | null>(null);
+  const [glyphVer, setGlyphVer] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [prog, setProg] = useState<LessonProgress>({ gridsCreated: 0, picked: false, placed: 0, resized: 0, carved: 0, mode: "", painted: 0, glyphOpened: false });
   const bump = (k: "gridsCreated" | "placed" | "resized" | "carved" | "painted") => practice && setProg((p) => ({ ...p, [k]: p[k] + 1 }));
@@ -508,11 +565,16 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
 
   useEffect(() => setMine(readMine()), []);
   useEffect(() => {
+    const list = readGlyphs();
+    setGlyphs(list);
+    if (registerCustomGlyphs(list)) setGlyphVer((v) => v + 1);
+  }, []);
+  useEffect(() => {
     if (practice) setProg((p) => (p.mode === mode ? p : { ...p, mode }));
   }, [mode, practice]);
 
   // ---------- persistence ----------
-  const saveData = useMemo<KnitData>(() => ({ ...doc, activeGridId: activeId, view }) as KnitData, [doc, activeId, view]);
+  const saveData = useMemo<KnitData>(() => withGlyphs({ ...doc, activeGridId: activeId, view }) as KnitData, [doc, activeId, view, glyphVer]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = useKnitAutosave(work.id, saveData, {
     enabled: !practice,
     initialSavedAt: seed ? null : work.updatedAt,
@@ -643,7 +705,7 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
     return true;
   };
 
-  const addGrid = (cols: number, rows: number, at?: Pt, block?: Block, name?: string) => {
+  const addGrid = (cols: number, rows: number, at?: Pt, block?: Block, name?: string, extra?: Partial<KGrid>) => {
     let x: number;
     let y: number;
     if (at) {
@@ -663,7 +725,7 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
         y = (H / 2 - v.y) / v.zoom - (rows * geo.ch) / 2;
       }
     }
-    let g: KGrid = { ...newGrid(name ?? nextGridName(h.get().grids), x, y, cols, rows), numbering: DEFAULT_NUMBERING };
+    let g: KGrid = { ...newGrid(name ?? nextGridName(h.get().grids), x, y, cols, rows), numbering: DEFAULT_NUMBERING, ...extra };
     if (block) g = tileBlock(g, block, { c0: 0, r0: 0, c1: cols - 1, r1: rows - 1 }, { c: cols % block.cols ? cols - block.cols * Math.ceil(cols / block.cols) : 0, r: 0 });
     h.set((d) => ({ ...d, grids: [...d.grids, g] }));
     setActiveId(g.id);
@@ -796,6 +858,138 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
     setMine(list);
     if (stamp?.id === id) setStamp(null);
   };
+
+  // ---------- 내 기호 (user-drawn symbols) ----------
+  const writeGlyphs = (list: MyGlyph[]) => {
+    try {
+      localStorage.setItem(GLYPH_KEY, JSON.stringify(list));
+    } catch {
+      toast("기호를 저장하지 못했어요");
+      return false;
+    }
+    setGlyphs(list);
+    return true;
+  };
+  const openGlyphEditor = (initial: MyGlyph | null) => {
+    if (practice) setProg((p) => ({ ...p, glyphOpened: true }));
+    setGlyphEdit({ initial });
+  };
+  const saveGlyph = (g: MyGlyph) => {
+    const cur = readGlyphs();
+    const exists = cur.some((x) => x.id === g.id);
+    if (!exists && cur.length >= GLYPH_MAX) {
+      toast("내 기호를 더 이상 저장할 수 없어요");
+      return;
+    }
+    const list = exists ? cur.map((x) => (x.id === g.id ? g : x)) : [g, ...cur];
+    if (!writeGlyphs(list)) return;
+    registerCustomGlyphs([g]);
+    setGlyphVer((v) => v + 1);
+    setGlyphEdit(null);
+    setTab("symbols");
+    setPaletteOpen(true);
+    if (!exists) {
+      setPick(g.id);
+      setStamp(null);
+      setMode("edit");
+      setSel(null);
+    }
+    toast(exists ? `「${g.name}」 기호를 고쳤어요` : `「${g.name}」을(를) 내 기호에 담았어요. 칸을 누르면 놓여요`);
+  };
+  const duplicateGlyph = (id: string) => {
+    const src = readGlyphs().find((x) => x.id === id);
+    if (!src) return;
+    const copy: MyGlyph = { ...src, id: `u_${uid()}`, name: `${src.name} 복사`.slice(0, 40), createdAt: Date.now() };
+    if (readGlyphs().length >= GLYPH_MAX) {
+      toast("기호를 복제하지 못했어요");
+      return;
+    }
+    if (writeGlyphs([copy, ...readGlyphs()])) {
+      registerCustomGlyphs([copy]);
+      setGlyphVer((v) => v + 1);
+      toast("기호를 복제했어요");
+    }
+  };
+  const deleteGlyph = (id: string) => {
+    // cells already on the chart keep their drawing (the symbol stays registered and is saved with the document)
+    writeGlyphs(readGlyphs().filter((x) => x.id !== id));
+    if (pick === id) setPick(null);
+  };
+
+  // ---------- AI 어시스턴트 (rule-based, local) ----------
+  const sendChat = (text: string) => {
+    const r = interpret(text, { doc: h.get(), activeId, sel, geo });
+    if (r.action === "undo") h.undo();
+    else if (r.action === "redo") h.redo();
+    if (r.addGrid) addGrid(r.addGrid.cols, r.addGrid.rows);
+    if (r.next) h.set(r.next);
+    if (r.activate !== undefined) setActiveId(r.activate);
+    if (r.sel !== undefined) {
+      setSel(r.sel);
+      if (r.sel) setMode("select");
+    }
+    setChat((c) => [...c, { id: uid(), from: "me" as const, text }, { id: uid(), from: "bot" as const, text: r.reply, undoable: !!(r.changed || r.addGrid) }].slice(-80));
+  };
+  const selBanner = (() => {
+    if (!sel || !selGrid) return null;
+    const n = selGrid.numbering ?? DEFAULT_NUMBERING;
+    const rn = (r: number) => (n.reverseRows !== false ? selGrid.rows - r : r + 1);
+    const cn = (c: number) => (n.reverseCols !== false ? selGrid.cols - c : c + 1);
+    const [ra, rb] = [rn(sel.r0), rn(sel.r1)].sort((a, b) => a - b);
+    const [ca, cb] = [cn(sel.c0), cn(sel.c1)].sort((a, b) => a - b);
+    return `선택 영역만 편집해요 · 단 ${ra}–${rb}, 코 ${ca}–${cb}`;
+  })();
+
+  // ---------- folders ----------
+  const addFolder = () => {
+    const d = h.get();
+    const folders = d.folders ?? [];
+    let n = folders.length + 1;
+    const names = new Set(folders.map((f) => f.name));
+    while (names.has(`폴더 ${n}`)) n++;
+    const f: KFolder = { id: uid(), name: `폴더 ${n}`, visible: true };
+    // the selected grid goes into the new folder
+    const move = active && !active.folderId ? active.id : null;
+    h.set({ ...d, folders: [...folders, f], grids: move ? d.grids.map((g) => (g.id === move ? { ...g, folderId: f.id } : g)) : d.grids });
+    toast(move ? `${f.name}을(를) 만들고 ${active!.name}을(를) 넣었어요` : `${f.name}을(를) 만들었어요. 레이어의 폴더 버튼으로 격자를 넣어요`);
+  };
+  const patchFolder = (id: string, patch: Partial<KFolder>) => {
+    const d = h.get();
+    const folders = (d.folders ?? []).map((f) => (f.id === id ? { ...f, ...patch } : f));
+    const grids = patch.visible === undefined ? d.grids : d.grids.map((g) => (g.folderId === id ? { ...g, visible: patch.visible! } : g));
+    const next = { ...d, folders, grids };
+    // folding is a view change: saved, but not an undo step
+    if (Object.keys(patch).every((k) => k === "collapsed")) h.replace(next);
+    else h.set(next);
+  };
+  const ungroup = (id: string) =>
+    h.set((d) => ({ ...d, folders: (d.folders ?? []).filter((f) => f.id !== id), grids: d.grids.map((g) => (g.folderId === id ? (({ folderId: _f, ...rest }) => rest)(g) : g)) }));
+  const deleteFolder = (id: string) => {
+    const gone = new Set(h.get().grids.filter((g) => g.folderId === id).map((g) => g.id));
+    h.set((d) => ({ ...d, folders: (d.folders ?? []).filter((f) => f.id !== id), grids: d.grids.filter((g) => !gone.has(g.id)) }));
+    if (sel && gone.has(sel.gridId)) setSel(null);
+    if (activeId && gone.has(activeId)) setActiveId(null);
+  };
+  const moveGrid = (gridId: string, folderId: string | null) =>
+    h.set((d) => ({ ...d, grids: d.grids.map((g) => (g.id !== gridId ? g : folderId ? { ...g, folderId } : (({ folderId: _f, ...rest }) => rest)(g))) }));
+
+  // ---------- version history ----------
+  const restoreVersion = (v: Version) => {
+    const d = normalize(v.data as KnitData);
+    setGlyphVer((x) => x + 1);
+    h.set(d);
+    setSel(null);
+    setActiveId(d.activeGridId ?? d.grids[0]?.id ?? null);
+    requestAnimationFrame(() => fit(d.grids));
+  };
+  const renderVersion = useCallback((data: WorkData) => {
+    const d = normalize(data as KnitData);
+    return buildSvg(d, geoOf(d), { numbers: true, labels: d.grids.filter((g) => g.visible).length > 1, background: "#ffffff" });
+  }, []);
+
+  // ---------- 실체화 (knitted look) ----------
+  const realizeGrid = active ?? visibleGrids[0] ?? null;
+  const fabric = useMemo(() => (realizeOpen && realizeGrid ? gridToFabric(realizeGrid, yarn) : null), [realizeOpen, realizeGrid, yarn]);
 
   // ---------- library ----------
   const chooseStamp = (s: Stamp | null) => {
@@ -1348,10 +1542,11 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
 
   // ---------- render ----------
   const defs = useMemo(() => {
-    const used = new Set<string>();
-    for (const g of doc.grids) for (const c of g.cells) if (c?.symbol && !knitSymbol(c.symbol)?.group) used.add(c.symbol);
+    // catalogue symbols, plus generated ids and user-drawn symbols (all of them, so the hover preview can use any)
+    const used = new Set<string>(customGlyphIds());
+    for (const g of doc.grids) for (const c of g.cells) if (c?.symbol && !isCatalogSymbol(c.symbol)) used.add(c.symbol);
     return symbolDefs(geo.cw, geo.ch) + (used.size ? symbolDefs(geo.cw, geo.ch, "ks", used) : "");
-  }, [geo, doc.grids]);
+  }, [geo, doc.grids, glyphVer]); // eslint-disable-line react-hooks/exhaustive-deps
   const z = view.zoom;
   const cursor =
     mode === "pan" || space
@@ -1527,8 +1722,9 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
       </button>
     );
   };
-  const navSoon = (label: string, icon: ReactNode) => (
-    <button className={cx(ab("ghost", "small", "iconOnly"), "text-fg-neutral-muted")} type="button" aria-label={label} title={label} aria-pressed={false} style={seedSize(36, 36)} onClick={soon}>
+  /** rail buttons that open a tool (dialog, panel or window) instead of a palette tab */
+  const navTool = (label: string, icon: ReactNode, on: boolean, onClick: () => void) => (
+    <button className={cx(ab(on ? "brandSolid" : "ghost", "small", "iconOnly"), !on && "text-fg-neutral-muted")} type="button" aria-label={label} title={label} aria-pressed={on} style={seedSize(36, 36)} onClick={onClick}>
       {icon}
     </button>
   );
@@ -1591,10 +1787,16 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
                 {navBtn("symbols", "기호", <Shapes className="seed-icon" />)}
                 {navBtn("library", "무늬 라이브러리", <LibraryBig className="seed-icon" />)}
                 {navBtn("mine", "내 무늬", <Box className="seed-icon" />)}
-                {navSoon("원문·파일로 만들기", <FileUp className="seed-icon" />)}
-                {navSoon("AI 어시스턴트", <Sparkle className="seed-icon" />)}
+                {navTool("원문·파일로 만들기", <FileUp className="seed-icon" />, importOpen, () => setImportOpen(true))}
+                {navTool("AI 어시스턴트", <Sparkle className="seed-icon" />, paletteOpen && tab === "assistant", () => {
+                  if (paletteOpen && tab === "assistant") setPaletteOpen(false);
+                  else {
+                    setTab("assistant");
+                    setPaletteOpen(true);
+                  }
+                })}
                 <span className="relative">
-                  {navSoon("실체화 (β)", <Rotate3d className="seed-icon" />)}
+                  {navTool("실체화 (β)", <Rotate3d className="seed-icon" />, realizeOpen, () => setRealizeOpen((v) => !v))}
                   <span className="t1-bold pointer-events-none absolute -top-1 -right-1 rounded-r1 bg-bg-brand-weak px-x1 text-fg-brand">β</span>
                 </span>
               </div>
@@ -1617,16 +1819,32 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
             </nav>
 
             <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              {paletteOpen && tab === "assistant" && (
+                <AssistantPanel
+                  width={paletteW}
+                  messages={chat}
+                  onSend={sendChat}
+                  onClear={() => setChat([])}
+                  onClose={() => setPaletteOpen(false)}
+                  onUndo={() => {
+                    h.undo();
+                    setChat((c) => [...c.map((m) => ({ ...m, undoable: false })), { id: uid(), from: "bot" as const, text: "마지막 변경을 되돌렸어요." }]);
+                  }}
+                  selection={selBanner}
+                  onClearSelection={() => setSel(null)}
+                  target={(selGrid ?? active ?? doc.grids[0])?.name ?? null}
+                />
+              )}
               <Palette
                 width={paletteW}
                 onWidth={setPaletteW}
-                open={paletteOpen}
+                open={paletteOpen && tab !== "assistant"}
                 onCollapse={() => setPaletteOpen(false)}
                 title={title}
                 onRename={practice ? undefined : rename}
                 save={practice ? undefined : save.status}
                 onRetrySave={save.retry}
-                tab={tab}
+                tab={tab === "assistant" ? "symbols" : tab}
                 geo={geo}
                 picked={paletteHighlight}
                 onPick={(id) => {
@@ -1636,10 +1854,11 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
                   setSel(null);
                   if (practice) setProg((p) => ({ ...p, picked: true }));
                 }}
-                onCreateGlyph={() => {
-                  if (practice) setProg((p) => ({ ...p, glyphOpened: true }));
-                  soon();
-                }}
+                onCreateGlyph={() => openGlyphEditor(null)}
+                myGlyphs={glyphs}
+                onEditGlyph={(id) => openGlyphEditor(glyphs.find((g) => g.id === id) ?? null)}
+                onDuplicateGlyph={duplicateGlyph}
+                onDeleteGlyph={(id) => setGlyphDelete(glyphs.find((g) => g.id === id) ?? null)}
                 stamp={stamp}
                 onStamp={chooseStamp}
                 active={active}
@@ -1846,6 +2065,22 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
                     />
                   </div>
 
+                  {realizeOpen && (
+                    <KnitPreviewWindow
+                      title="실체화"
+                      beta
+                      subtitle={realizeGrid?.name}
+                      chart={fabric?.chart ?? null}
+                      approx={fabric?.approx}
+                      gauge={doc.gauge}
+                      yarn={{ value: yarn, onChange: setYarn }}
+                      fileName={`${safeName(title)}-실체화`}
+                      emptyTitle="실체화할 격자가 아직 없어요"
+                      emptyHint="격자를 만들고 기호를 놓으면 실제로 뜬 모양을 보여 드려요."
+                      closeLabel="차트로 돌아가기"
+                      onClose={() => setRealizeOpen(false)}
+                    />
+                  )}
                   {/* bottom toolbar + its popovers */}
                   <div className="pointer-events-none absolute bottom-3 z-50 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-col items-center gap-2 pb-[env(safe-area-inset-bottom)]" style={{ left: "50%" }}>
                     <div className="flex flex-col items-center gap-2">
@@ -2026,7 +2261,7 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
                   savedAt={save.savedAt}
                   practice={!!practice}
                   onZoom={(a) => (a === "in" ? zoomAt(1.25) : a === "out" ? zoomAt(0.8) : a === "reset" ? zoomAt(1 / viewRef.current.zoom) : (touchView(), fit()))}
-                  onHistory={soon}
+                  onHistory={() => setHistoryOpen(true)}
                   onActivate={(id) => {
                     setActiveId(id);
                     if (sel && sel.gridId !== id) setSel(null);
@@ -2035,7 +2270,11 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
                   onToggle={(id) => editGrid(id, (g) => ({ ...g, visible: !g.visible }))}
                   onDelete={deleteGrid}
                   onAddGrid={() => addGrid(gridPop.cols, gridPop.rows)}
-                  onAddFolder={soon}
+                  onAddFolder={addFolder}
+                  onFolder={patchFolder}
+                  onUngroup={ungroup}
+                  onDeleteFolder={deleteFolder}
+                  onMoveGrid={moveGrid}
                   onNumbering={(n) => active && editGrid(active.id, (g) => ({ ...g, numbering: n }))}
                   onSides={(s) => active && editGrid(active.id, (g) => ({ ...g, sides: s }))}
                   onGaugeOn={(on) => h.set((d) => ({ ...d, gaugeOn: on }))}
@@ -2066,6 +2305,38 @@ function Editor({ work, data, seed, practice, onExitPractice, onLessons, onTour,
       <ContextMenu at={ctx} items={menuItems} onClose={() => setCtx(null)} />
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={onExport} />
       <ShortcutDialog open={helpOpen} onClose={() => setHelpOpen(false)} groups={SHORTCUTS} />
+      <ImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        geo={geo}
+        onCreate={(block, sides, name) => {
+          addGrid(block.cols, block.rows, undefined, block, name, { sides });
+          setMode("select");
+        }}
+      />
+      <GlyphEditor open={!!glyphEdit} initial={glyphEdit?.initial ?? null} onClose={() => setGlyphEdit(null)} onSave={saveGlyph} />
+      {!practice && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} workId={work.id} current={() => withGlyphs({ ...h.get(), activeGridId: activeId, view }) as KnitData} render={renderVersion} onRestore={restoreVersion} />}
+      <Dialog
+        open={!!glyphDelete}
+        onClose={() => setGlyphDelete(null)}
+        title="내 기호 삭제"
+        footer={
+          <>
+            <Button onClick={() => setGlyphDelete(null)}>취소</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (glyphDelete) deleteGlyph(glyphDelete.id);
+                setGlyphDelete(null);
+              }}
+            >
+              삭제
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[0.875rem] leading-[1.6]">「{glyphDelete?.name}」 기호를 라이브러리에서 삭제할까요? 이미 차트에 놓은 칸은 그대로 남아요.</p>
+      </Dialog>
 
       <Dialog
         open={!!saveMineOpen}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { works } from "@/lib/store";
+import { versions } from "@/lib/versions";
 import type { WorkData } from "@/lib/types";
 
 export type SaveStatus = "saved" | "saving" | "error";
@@ -33,7 +34,10 @@ export function useKnitAutosave(id: string, data: WorkData, opts: { enabled: boo
     const ok = works.save(id, latest.current, thumbnail ? { thumbnail } : {});
     pending.current = false;
     setStatus(ok ? "saved" : "error");
-    if (ok) setSavedAt(Date.now());
+    if (ok) {
+      setSavedAt(Date.now());
+      versions.autoSnapshot(id, latest.current);
+    }
     return ok;
   }, [enabled, id]);
 

@@ -7,6 +7,7 @@ import { works } from "@/lib/store";
 import { useAutosave } from "@/lib/useAutosave";
 import { useHistory } from "@/lib/useHistory";
 import type { GridData, GridMode, GridPage, View, Work } from "@/lib/types";
+import { KnitPreviewWindow, type PChart } from "@/components/editor/common/KnitPreview";
 import type { Converted } from "./convert";
 import { Checkbox, Seg, ab, abBase, el } from "./fields";
 import { GridCanvas, ZOOM_MAX, ZOOM_MIN, type Tool } from "./GridCanvas";
@@ -126,6 +127,11 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
   const aspect = cellAspect(doc.mode, doc.gauge);
   const safe = doc.safeOn ? doc.safe ?? { sts: 0, rows: 0 } : { sts: 0, rows: 0 };
   const numbering = numberingOf(doc);
+  // 뜬 모습 미리보기: every cell is a knit stitch in its yarn (empty = background yarn)
+  const previewChart = useMemo<PChart>(
+    () => ({ cols: page.cols, rows: page.rows, cells: page.cells.map((v) => ({ k: "knit" as const, color: doc.yarns[v < 0 ? 0 : v] ?? doc.yarns[0] })) }),
+    [page, doc.yarns],
+  );
 
   // ---- view state (not history) ----
   const [view, setView] = useState<View>({ x: 0, y: 0, zoom: 1 });
@@ -149,6 +155,7 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
   const [helpOpen, setHelpOpen] = useState(false);
   const [title, setTitle] = useState(work.title);
   const [renaming, setRenaming] = useState(false);
+  const [preview, setPreview] = useState(false);
   const clip = useRef<Block | null>(null);
 
   const setTool = (t: Tool) => {
@@ -504,7 +511,7 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-bg-layer-fill text-fg-neutral" data-editor-shell>
       <StartDialog open={startOpen} onPick={pickStart} onClose={() => setStartOpen(false)} />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <Rail tab={tab} onTab={onTab} onPreview={() => toast(doc.mode === "knit" ? "준비 중이에요" : "뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요")} onAtelier={soon} onShare={soon} onExport={() => setExportOpen(true)} />
+        <Rail tab={tab} onTab={onTab} onPreview={() => (doc.mode === "knit" ? setPreview((v) => !v) : toast("뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요"))} onAtelier={soon} onShare={soon} onExport={() => setExportOpen(true)} />
 
         {leftOpen && (
           <div className="absolute inset-y-0 left-14 z-[60] h-full shadow-s3 lg:relative lg:left-0 lg:z-auto lg:shadow-none">
@@ -711,6 +718,21 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
                 <LX className="size-4" />
               </button>
             </div>
+          )}
+
+          {preview && doc.mode === "knit" && (
+            <KnitPreviewWindow
+              title="뜬 모습 미리보기"
+              beta
+              subtitle={page.name}
+              chart={previewChart}
+              gauge={doc.gauge}
+              fileName={`${safeName(title)}-미리보기`}
+              emptyTitle="미리 볼 칸이 없어요"
+              emptyHint="칸을 칠하면 대바늘로 뜬 모습으로 보여 드려요."
+              closeLabel="차트로 돌아가기"
+              onClose={() => setPreview(false)}
+            />
           )}
 
           <Toolbar

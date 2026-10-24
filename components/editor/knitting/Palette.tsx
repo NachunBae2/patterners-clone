@@ -4,7 +4,8 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { cx } from "@/components/app/ui";
 import { KNIT_GROUPS, KNIT_SYMBOLS, KnitSymbolIcon } from "@/lib/symbols/knitting";
 import { AB_TAIL, ab, seedSize } from "./ab";
-import { ChevronDown, CloudAlert, CloudCheck, PanelLeft, Pencil, Search, Trash2, X } from "./icons";
+import { ChevronDown, CloudAlert, CloudCheck, Copy, PanelLeft, Pencil, Search, Trash2, X } from "./icons";
+import type { MyGlyph } from "./GlyphEditor";
 import { KNIT_LIBRARY, LIB_CATS } from "./library";
 import { gridBody } from "./render";
 import type { Block, Geo, KGrid } from "./model";
@@ -67,6 +68,11 @@ type Props = {
   picked: string | null;
   onPick: (id: string) => void;
   onCreateGlyph: () => void;
+  /** user-drawn symbols (내 기호) */
+  myGlyphs: MyGlyph[];
+  onEditGlyph: (id: string) => void;
+  onDuplicateGlyph: (id: string) => void;
+  onDeleteGlyph: (id: string) => void;
   stamp: Stamp | null;
   onStamp: (s: Stamp | null) => void;
   active: KGrid | null;
@@ -102,6 +108,7 @@ export function Palette(p: Props) {
     [q],
   );
   const mine = useMemo(() => p.mine.filter((m) => matches(m.name, q)), [p.mine, q]);
+  const myGlyphs = useMemo(() => p.myGlyphs.filter((g) => matches(`${g.name} 내 기호`, q)), [p.myGlyphs, q]);
 
   // resize handle
   const drag = useRef<{ x: number; w: number } | null>(null);
@@ -241,7 +248,46 @@ export function Palette(p: Props) {
                 <div className="space-y-4 p-2 pt-3 pb-4">
                   {p.tab === "symbols" && (
                     <div className="space-y-6">
-                      {groups.length === 0 && <p className="py-x8 text-center text-[12px] text-fg-neutral-subtle">찾는 기호가 없어요.</p>}
+                      {groups.length === 0 && !myGlyphs.length && <p className="py-x8 text-center text-[12px] text-fg-neutral-subtle">찾는 기호가 없어요.</p>}
+                      {myGlyphs.length > 0 && (
+                        <div data-my-glyphs="">
+                          {groupHeader("custom", "내 기호")}
+                          {!closed.has("custom") && (
+                            <div className="panel-tile-grid gap-1">
+                              {myGlyphs.map((s) => {
+                                const on = p.picked === s.id;
+                                return (
+                                  <div key={s.id} className="group/glyph relative">
+                                    <button
+                                      className={cx(ab(on ? "brandSolid" : "ghost"), AB_TAIL, "h-auto w-full flex-col gap-0.5 rounded-r2 px-1 py-1.5 whitespace-normal")}
+                                      type="button"
+                                      aria-label={s.name}
+                                      aria-pressed={on}
+                                      title={s.width > 1 ? `${s.name} · ${s.width}코` : s.name}
+                                      onClick={() => p.onPick(s.id)}
+                                    >
+                                      <KnitSymbolIcon id={s.id} className={cx("shrink-0 overflow-visible", on ? "text-fg-neutral-inverted" : "text-fg-neutral")} />
+                                      {/* layout-audit-ignore: tiny-text — matches the reference palette, which sets these captions at 10px */}
+                                      <span className="line-clamp-2 max-w-full text-center text-[10px] leading-[13px] break-keep whitespace-normal">{s.name}</span>
+                                    </button>
+                                    <span className="absolute top-0.5 right-0.5 hidden gap-px rounded-r1 bg-bg-layer-floating/95 shadow-s1 group-focus-within/glyph:flex group-hover/glyph:flex">
+                                      <button type="button" aria-label="내 기호 편집" title="내 기호 편집" onClick={() => p.onEditGlyph(s.id)} className="flex size-6 items-center justify-center rounded-r1 text-fg-neutral-muted hover:text-fg-neutral">
+                                        <Pencil className="size-3" />
+                                      </button>
+                                      <button type="button" aria-label="복제하기" title="복제하기" onClick={() => p.onDuplicateGlyph(s.id)} className="flex size-6 items-center justify-center rounded-r1 text-fg-neutral-muted hover:text-fg-neutral">
+                                        <Copy className="size-3" />
+                                      </button>
+                                      <button type="button" aria-label="내 기호 삭제" title="내 기호 삭제" onClick={() => p.onDeleteGlyph(s.id)} className="flex size-6 items-center justify-center rounded-r1 text-fg-neutral-muted hover:text-fg-critical">
+                                        <Trash2 className="size-3" />
+                                      </button>
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {groups.map((g) => (
                         <div key={g.id}>
                           {groupHeader(g.id, g.label)}

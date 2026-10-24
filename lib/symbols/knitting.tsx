@@ -22,7 +22,8 @@ export type KnitGroupId =
   | "markers"
   | "short_rows"
   | "brioche"
-  | "chars";
+  | "chars"
+  | "custom";
 
 export type KnitSymbol = {
   id: string;
@@ -397,7 +398,7 @@ export function knitLabel(id: string): string {
 
 const KNIT_GROUP_LIST: [KnitGroupId, string][] = [["basic", "기본"], ["inc", "코 늘리기"], ["dec2", "2코 모아뜨기"], ["dec3", "3코 모아뜨기"], ["dec45", "4·5코 모아뜨기"], ["dec68", "6~8코 모아뜨기"], ["twist", "꼬아뜨기"], ["cross1", "교차 2·3코 너비"], ["cross2", "교차 4·5코 너비 (꽈배기)"], ["cross3", "교차 6코 너비"], ["cross4", "교차 7·8코 너비"], ["cross5", "교차 9코 이상 너비"], ["special", "특수 뜨기"], ["markers", "마커"], ["short_rows", "되돌아뜨기"], ["brioche", "브리오슈"], ["chars", "글자·숫자"]];
 
-const CATALOG: Record<KnitGroupId, [string, string][]> = {
+const CATALOG: Record<Exclude<KnitGroupId, "custom">, [string, string][]> = {
   basic: [["empty", "지우기"], ["blank", "빈칸 (코 없음)"], ["knit", "겉뜨기"], ["purl", "안뜨기"], ["yo", "바늘비우기"], ["yo_tbl", "바늘비우기 꼬아뜨기 (yo tbl)"], ["yo2", "바늘비우기 2번 (2회 감기)"], ["yo3", "바늘비우기 3번 (3회 감기)"], ["slip", "걸러뜨기 (sl1)"], ["slip_p", "걸러뜨기 (실 앞에 두고, sl1 wyif)"], ["slip_p2", "걸러뜨기 (실 앞에 두고, 2코, sl2 wyif)"], ["slip_p3", "걸러뜨기 (실 앞에 두고, 3코, sl3 wyif)"], ["slip_k", "겉뜨기 방향 걸러뜨기 (sl1 kwise)"], ["bind_off", "덮어씌우기"], ["bind_off_p", "안뜨기 코막음"], ["bo_last", "코막음 후 오른바늘에 남은 코"], ["cast_on", "감아코"]],
   inc: [["m1l", "왼코 늘리기 (M1L)"], ["m1r", "오른코 늘리기 (M1R)"], ["m1lp", "왼코 늘리기 안뜨기 (M1LP)"], ["m1rp", "오른코 늘리기 안뜨기 (M1RP)"], ["lli", "왼코 끌어올려 늘리기 (LLI)"], ["rli", "오른코 끌어올려 늘리기 (RLI)"], ["llip", "왼코 끌어올려 늘리기 안뜨기 (LLIP)"], ["rlip", "오른코 끌어올려 늘리기 안뜨기 (RLIP)"], ["kfb", "겉뜨기 코늘리기 (kfb)"], ["pfb", "안뜨기 코늘리기 (pfb)"], ["cdi3", "중심 3코 늘리기"], ["kfbf", "겉뜨기 앞·뒤·앞 코늘리기 (kfbf, 1코→3코)"], ["inc1to3p", "1코에 3코 떠내기 (안뜨기)"], ["inc1to4", "1코에 4코 떠내기"], ["inc1to4p", "1코에 4코 떠내기 (안뜨기)"], ["inc1to5", "1코에 5코 떠내기"], ["inc1to5p", "1코에 5코 떠내기 (안뜨기)"], ["inc1to6", "1코에 6코 떠내기"], ["inc1to6p", "1코에 6코 떠내기 (안뜨기)"], ["inc1to7", "1코에 7코 떠내기"], ["inc1to7p", "1코에 7코 떠내기 (안뜨기)"], ["inc1to8", "1코에 8코 떠내기"], ["inc1to8p", "1코에 8코 떠내기 (안뜨기)"]],
   dec2: [["ssk", "SSK (오른코 겹쳐 2코 모아뜨기)"], ["k2tog", "k2tog (왼코 겹쳐 2코 모아뜨기)"], ["ssp", "SSP (오른코 겹쳐 2코 모아 안뜨기)"], ["p2tog", "p2tog (왼코 겹쳐 2코 모아 안뜨기)"], ["cdd2", "중심 2코 모아뜨기"], ["cddp2", "중심 2코 모아 안뜨기"], ["ssk_tbl", "꼬아 오른코 겹쳐 2코 모아뜨기"], ["k2tog_tbl", "꼬아 왼코 겹쳐 2코 모아뜨기 (k2tog tbl)"], ["ssp_tbl", "오른코 겹쳐 2코 모아 안뜨기 (꼬아)"], ["p2tog_tbl", "왼코 겹쳐 2코 모아 안뜨기 (꼬아)"]],
@@ -419,7 +420,7 @@ const CATALOG: Record<KnitGroupId, [string, string][]> = {
 
 // ---------- catalogue ----------
 
-const GROUP_IDS = Object.keys(CATALOG) as KnitGroupId[];
+const GROUP_IDS = Object.keys(CATALOG) as Exclude<KnitGroupId, "custom">[];
 
 export const KNIT_GROUPS: { id: KnitGroupId; label: string }[] = KNIT_GROUP_LIST.map(([id, label]) => ({ id, label }));
 
@@ -482,7 +483,59 @@ export const canonicalSymbol = (id: string) => ALIAS[id] ?? id;
 const BY_ID = new Map(KNIT_SYMBOLS.map((s) => [s.id, s]));
 const DYN = new Map<string, KnitSymbol | null>();
 const GLYPHS = new Map<string, Glyph | null>();
+
+// ---------- user-drawn symbols ("내 기호") ----------
+
+/** A symbol drawn in the glyph editor: markup inside a 24·width × 24 box (same convention as the catalogue). */
+export type CustomGlyph = { id: string; name: string; width: number; svg: string; createdAt?: number };
+export const CUSTOM_PREFIX = "u_";
+const CUSTOM = new Map<string, { sym: KnitSymbol; glyph: Glyph }>();
+/** markup a user typed in could carry anything: keep only the drawing elements and their geometry attributes */
+const SAFE_TAGS = /^(path|line|circle|ellipse|rect|polyline|polygon|text)$/;
+const SAFE_ATTRS = /^(d|x|y|x1|y1|x2|y2|cx|cy|r|rx|ry|width|height|points|fill|stroke-width|font-size|font-weight|text-anchor|dominant-baseline|transform)$/;
+export function sanitizeGlyphSvg(svg: string): string {
+  let out = "";
+  const re = /<(\w+)((?:\s+[\w-]+="[^"<>]*")*)\s*(\/?)>(?:([^<]*)<\/\1>)?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(svg))) {
+    const tag = m[1];
+    if (!SAFE_TAGS.test(tag)) continue;
+    const attrs = [...m[2].matchAll(/([\w-]+)="([^"<>]*)"/g)]
+      .filter(([, k, v]) => SAFE_ATTRS.test(k) && !(tag === "text" && k === "fill") && !/url\(|javascript:/i.test(v))
+      .map(([, k, v]) => ` ${k}="${v}"`)
+      .join("");
+    const text = tag === "text" ? (m[4] ?? "").replace(/[<>&]/g, "") : "";
+    out += tag === "text" ? `<text${attrs} fill="currentColor" stroke="none" font-family="Pretendard, Arial, sans-serif">${text}</text>` : `<${tag}${attrs}/>`;
+  }
+  return out;
+}
+/** Registers user glyphs so every renderer (palette, chart, export, thumbnails) can draw them. Returns true when something changed. */
+export function registerCustomGlyphs(list: CustomGlyph[] | undefined | null): boolean {
+  let changed = false;
+  for (const g of list ?? []) {
+    if (!g || typeof g.id !== "string" || !g.id.startsWith(CUSTOM_PREFIX)) continue;
+    const width = Math.max(1, Math.min(8, Math.round(g.width) || 1));
+    const svg = sanitizeGlyphSvg(String(g.svg ?? ""));
+    const name = String(g.name ?? "").slice(0, 40) || "내 기호";
+    const cur = CUSTOM.get(g.id);
+    if (cur && cur.sym.name === name && cur.sym.width === width && cur.glyph.svg === svg) continue;
+    CUSTOM.set(g.id, { sym: { id: g.id, name, group: "custom", width }, glyph: { svg, stretch: width > 1 } });
+    changed = true;
+  }
+  return changed;
+}
+export const isCustomSymbol = (id: string | undefined) => !!id && CUSTOM.has(id);
+export const customGlyphIds = () => [...CUSTOM.keys()];
+/** the registered definition of a user glyph (for saving it alongside a document) */
+export function customGlyphOf(id: string): CustomGlyph | null {
+  const c = CUSTOM.get(id);
+  return c ? { id, name: c.sym.name, width: c.sym.width, svg: c.glyph.svg } : null;
+}
+export const isCatalogSymbol = (id: string) => BY_ID.has(canonicalSymbol(id));
+
 const glyph = (id: string) => {
+  const custom = CUSTOM.get(id);
+  if (custom) return custom.glyph;
   if (!GLYPHS.has(id)) GLYPHS.set(id, glyphOf(id));
   return GLYPHS.get(id) ?? null;
 };
@@ -491,7 +544,7 @@ const glyph = (id: string) => {
 export const knitSymbol = (raw: string | undefined): KnitSymbol | undefined => {
   if (!raw) return undefined;
   const id = canonicalSymbol(raw);
-  const hit = BY_ID.get(id);
+  const hit = BY_ID.get(id) ?? CUSTOM.get(id)?.sym;
   if (hit) return hit;
   if (!DYN.has(id)) {
     const g = id.startsWith("k_") ? glyph(id) : null;
