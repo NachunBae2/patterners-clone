@@ -3,10 +3,15 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, ContextMenu, Dialog, Menu, cx, useToast, type MenuItem } from "@/components/app/ui";
-import { HomeSidebar, NAV, type HomeView } from "@/components/home/Sidebar";
+import { HomeSidebar, NAV, type FooterAction, type HomeView } from "@/components/home/Sidebar";
+import { AccountDialog } from "@/components/home/AccountDialog";
+import { ContactDialog } from "@/components/home/ContactDialog";
+import { HelpChat } from "@/components/home/HelpChat";
+import { NoticesDialog } from "@/components/home/NoticesDialog";
+import { NotificationsBell } from "@/components/home/NotificationsPopover";
+import { PlanDialog } from "@/components/home/PlanDialog";
 import {
   ApparelGlyph,
-  BellIcon,
   CrochetGlyph,
   GridGlyph,
   KnittingGlyph,
@@ -22,6 +27,9 @@ import {
 } from "@/components/home/icons";
 import { Wordmark } from "@/components/Wordmark";
 import { SpotlightTour, tourSeen, type TourStep } from "@/components/tour/SpotlightTour";
+import type { HelpAction } from "@/lib/helpIndex";
+import { markNoticesRead, noticesRead } from "@/lib/notices";
+import { profile } from "@/lib/profile";
 import { useWorkList, works } from "@/lib/store";
 import { CRAFT_LABEL, type Craft, type Work } from "@/lib/types";
 import "@/components/home/home.css";
@@ -138,6 +146,10 @@ export default function HomePage() {
   const [navOpen, setNavOpen] = useState(false);
   const [notice, setNotice] = useState(true);
   const [tour, setTour] = useState(false);
+  const [dialog, setDialog] = useState<"notices" | "contact" | "plan" | "account" | null>(null);
+  const [noticeId, setNoticeId] = useState<string | null>(null);
+  const [help, setHelp] = useState(false);
+  const [noticeDot, setNoticeDot] = useState(true);
   const soon = () => toast(SOON);
 
   // Restore ?tab= and the dismissed notice after mount (static page, no SSR data).
@@ -149,6 +161,7 @@ export default function HomePage() {
     } catch {}
     if (isView(tab)) setViewState(tab);
     if (dismissed) setNotice(false);
+    if (noticesRead()) setNoticeDot(false);
     // first visit: the "내 작업 공간" tour (after paint, like the reference)
     const raf = requestAnimationFrame(() => {
       if (!tourSeen.home()) setTour(true);
@@ -170,6 +183,28 @@ export default function HomePage() {
     setViewState(v);
     setNavOpen(false);
     window.history.replaceState(null, "", v === "all" ? "/home" : `/home?tab=${v}`);
+  };
+
+  const openNotices = (id: string | null) => {
+    setNavOpen(false);
+    setNoticeId(id);
+    setDialog("notices");
+    markNoticesRead();
+    setNoticeDot(false);
+  };
+
+  /** Sidebar footer items and help-chat shortcuts. */
+  const onAction = (a: FooterAction | HelpAction) => {
+    setNavOpen(false);
+    if (a === "atelier") return router.push("/atelier");
+    if (a === "tour") return openTour();
+    if (a === "help") return setHelp(true);
+    if (a === "notices") return openNotices(null);
+    if (a === "logout") {
+      profile.logout();
+      return router.push("/");
+    }
+    setDialog(a);
   };
 
   const dismissNotice = () => {
@@ -202,14 +237,14 @@ export default function HomePage() {
   return (
     <div className="flex min-h-dvh bg-bg-layer-default" data-own-chrome="true" data-works-home="">
       <aside className="sticky top-0 hidden h-dvh shrink-0 flex-col lg:flex">
-        <HomeSidebar className="min-h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} />
+        <HomeSidebar className="min-h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} onAction={onAction} noticeDot={noticeDot} />
       </aside>
 
       {navOpen && (
         <div className="fixed inset-0 z-50 flex lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setNavOpen(false)} />
           <div className="relative h-dvh bg-bg-layer-default shadow-s3">
-            <HomeSidebar className="h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} />
+            <HomeSidebar className="h-dvh" view={view} onView={setView} onSoon={soon} onTour={openTour} onAction={onAction} noticeDot={noticeDot} />
           </div>
         </div>
       )}
@@ -234,7 +269,7 @@ export default function HomePage() {
             <div className="seed-callout__content seed-callout__content--tone_informative flex min-w-0 flex-1 items-baseline gap-x1_5">
               <span className="seed-callout__title seed-callout__title--tone_informative shrink-0 whitespace-nowrap">새 공지</span>
               <span className="seed-callout__description seed-callout__description--tone_informative min-w-0 truncate">[update] 기능 업데이트 안내 (26.10.21)</span>
-              <button type="button" className="seed-callout__link seed-callout__link--tone_informative shrink-0" onClick={soon}>
+              <button type="button" className="seed-callout__link seed-callout__link--tone_informative shrink-0" onClick={() => openNotices(NOTICE_ID)}>
                 보기
               </button>
             </div>
@@ -269,14 +304,7 @@ export default function HomePage() {
               )}
             </label>
             <span className="hidden lg:contents">
-              <button
-                type="button"
-                aria-label="알림"
-                onClick={soon}
-                className="seed-action-button seed-action-button--variant_ghost seed-action-button--size_small seed-action-button--layout_iconOnly seed-action-button--size_small-layout_iconOnly seed-scale-feedback relative rounded-full"
-              >
-                <BellIcon className="seed-icon" />
-              </button>
+              <NotificationsBell />
             </span>
             {trash ? (
               visible.length > 0 && (
@@ -367,6 +395,11 @@ export default function HomePage() {
 
       <RenameDialog entry={renaming} onClose={() => setRenaming(null)} />
       <SpotlightTour open={tour} steps={HOME_TOUR} onClose={closeTour} />
+      <NoticesDialog open={dialog === "notices"} openId={noticeId} onOpenId={setNoticeId} onClose={() => setDialog(null)} />
+      <ContactDialog open={dialog === "contact"} onClose={() => setDialog(null)} />
+      <PlanDialog open={dialog === "plan"} onClose={() => setDialog(null)} onContact={() => setDialog("contact")} />
+      <AccountDialog open={dialog === "account"} onClose={() => setDialog(null)} />
+      <HelpChat open={help} onClose={() => setHelp(false)} onAction={onAction} />
     </div>
   );
 }

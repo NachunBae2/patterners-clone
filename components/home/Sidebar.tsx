@@ -37,15 +37,17 @@ export const NAV: { id: HomeView; label: string; Icon: IconC; cls: string; ready
   { id: "trash", label: "휴지통", Icon: TrashIcon, cls: PREFIX, ready: true },
 ];
 
-const FOOTER: { label: string; icon: ReactNode; dot?: boolean }[] = [
-  { label: "아뜰리에 (beta)", icon: <StoreIcon className={PREFIX} /> },
-  { label: "사용방법 보기", icon: <HelpIcon className={PREFIX} /> },
-  { label: "기능 물어보기", icon: <ChatIcon className={PREFIX} /> },
-  { label: "공지사항", icon: <MegaphoneIcon />, dot: true },
-  { label: "문의하기", icon: <MessageSquareIcon className={PREFIX} /> },
-  { label: "플랜 구매", icon: <CardIcon className={PREFIX} /> },
-  { label: "계정 설정", icon: <SettingsIcon className={PREFIX} /> },
-  { label: "로그아웃", icon: <LogOutIcon className={PREFIX} /> },
+export type FooterAction = "atelier" | "tour" | "help" | "notices" | "contact" | "plan" | "account" | "logout";
+
+const FOOTER: { id: FooterAction; label: string; icon: ReactNode; dot?: boolean }[] = [
+  { id: "atelier", label: "아뜰리에 (beta)", icon: <StoreIcon className={PREFIX} /> },
+  { id: "tour", label: "사용방법 보기", icon: <HelpIcon className={PREFIX} /> },
+  { id: "help", label: "기능 물어보기", icon: <ChatIcon className={PREFIX} /> },
+  { id: "notices", label: "공지사항", icon: <MegaphoneIcon />, dot: true },
+  { id: "contact", label: "문의하기", icon: <MessageSquareIcon className={PREFIX} /> },
+  { id: "plan", label: "플랜 구매", icon: <CardIcon className={PREFIX} /> },
+  { id: "account", label: "계정 설정", icon: <SettingsIcon className={PREFIX} /> },
+  { id: "logout", label: "로그아웃", icon: <LogOutIcon className={PREFIX} /> },
 ];
 
 /** Left navigation of the works home (SEED side-navigation markup, 240px). */
@@ -54,6 +56,8 @@ export function HomeSidebar({
   onView,
   onSoon,
   onTour,
+  onAction,
+  noticeDot = true,
   className,
 }: {
   view: HomeView;
@@ -61,6 +65,10 @@ export function HomeSidebar({
   onSoon: () => void;
   /** "사용방법 보기" reopens the home tour */
   onTour?: () => void;
+  /** footer items (아뜰리에, 기능 물어보기, 공지사항, 문의하기, 플랜 구매, 계정 설정, 로그아웃) */
+  onAction?: (a: FooterAction) => void;
+  /** red dot on 공지사항 until the latest notice was read */
+  noticeDot?: boolean;
   className?: string;
 }) {
   return (
@@ -120,13 +128,13 @@ export function HomeSidebar({
             type="button"
             className="seed-side-navigation-menu-item__root"
             data-side-navigation-state="expanded"
-            aria-label={f.dot ? `${f.label} · 새 공지` : undefined}
-            onClick={f.label === "사용방법 보기" && onTour ? onTour : onSoon}
+            aria-label={f.dot && noticeDot ? `${f.label} · 새 공지` : undefined}
+            onClick={f.id === "tour" && onTour ? onTour : () => (onAction ? onAction(f.id) : onSoon())}
           >
             {f.dot ? (
               <span aria-hidden="true" data-side-navigation-state="expanded" className={`[&>svg]:size-full ${PREFIX}`}>
                 {f.icon}
-                <span className="absolute -top-px -left-px size-x1_5 rounded-full bg-bg-critical-solid" aria-hidden="true" />
+                {noticeDot && <span className="absolute -top-px -left-px size-x1_5 rounded-full bg-bg-critical-solid" aria-hidden="true" />}
               </span>
             ) : (
               f.icon
