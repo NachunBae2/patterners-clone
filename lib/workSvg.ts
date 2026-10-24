@@ -49,6 +49,7 @@ export function workSvg(craft: Craft, data: WorkData, pageId?: string): string |
     const doc = knitDoc(data as KnitData);
     return knitSvg(doc, geoOf(doc), { numbers: true, labels: true, legend: true, background: "#ffffff" });
   }
+  if (craft !== "grid") return null; // 의류·페이퍼 have their own export
   const doc = gridDoc(data as GridData);
   const page = doc.pages.find((p) => p.id === pageId) ?? activePage(doc);
   return chartSvg(doc, page, cellAspect(doc.mode, doc.gauge));
@@ -61,7 +62,7 @@ export function workThumb(craft: Craft, data: WorkData): string {
   else if (craft === "knitting") {
     const doc = knitDoc(data as KnitData);
     svg = knitThumb(doc, geoOf(doc));
-  } else {
+  } else if (craft === "grid") {
     const doc = gridDoc(data as GridData);
     svg = thumbSvg(doc, activePage(doc), cellAspect(doc.mode, doc.gauge));
   }

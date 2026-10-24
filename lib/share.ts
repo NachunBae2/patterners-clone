@@ -36,6 +36,7 @@ function validData(craft: Craft, d: unknown): d is WorkData {
   const arr = (v: unknown) => Array.isArray(v);
   if (craft === "crochet") return arr(x.layers) && (x.layers as { items?: unknown }[]).every((l) => l && arr(l.items));
   if (craft === "knitting") return arr(x.grids) && (x.grids as { cells?: unknown; cols?: unknown; rows?: unknown }[]).every((g) => g && arr(g.cells) && Number(g.cols) > 0 && Number(g.rows) > 0);
+  if (craft !== "grid") return false;
   return (
     arr(x.pages) &&
     arr(x.yarns) &&
