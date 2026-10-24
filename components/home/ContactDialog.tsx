@@ -29,6 +29,16 @@ function mailtoOf(q: Inquiry) {
   return `mailto:${site.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+/** Opens the user's mail app. A real link click, so browsers treat it like any mailto: link. */
+function openMail(href: string) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 const fmt = (ts: number) => new Date(ts).toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" });
 
 /** 문의하기: the form opens the user's mail app (mailto:) and keeps a local copy under "보낸 문의". */
@@ -51,7 +61,7 @@ export function ContactDialog({ open, onClose }: { open: boolean; onClose: () =>
     const q: Inquiry = { id: uid(), at: Date.now(), name: name.trim(), email: email.trim(), category, message: message.trim() };
     sent.write([q, ...sent.read()]);
     notifications.add({ kind: "inquiry", title: "문의 사본을 ‘보낸 문의’에 남겼어요", body: CAT_LABEL[category] });
-    window.location.href = mailtoOf(q);
+    openMail(mailtoOf(q));
     setMessage("");
     setError("");
     setTab("sent");
@@ -74,7 +84,7 @@ export function ContactDialog({ open, onClose }: { open: boolean; onClose: () =>
         viewing ? (
           <>
             <Button onClick={() => setViewing(null)}>목록으로</Button>
-            <Button variant="primary" onClick={() => (window.location.href = mailtoOf(viewing))}>
+            <Button variant="primary" onClick={() => openMail(mailtoOf(viewing))}>
               메일 앱으로 다시 열기
             </Button>
           </>

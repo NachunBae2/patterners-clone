@@ -10,6 +10,7 @@ import { WorkPreview, workFacts } from "@/components/app/WorkPreview";
 import { SearchIcon, XIcon } from "@/components/home/icons";
 import { Wordmark } from "@/components/Wordmark";
 import { TAXONOMY, atelier, tagsOf, useAtelier, type AtelierEntry } from "@/lib/atelier";
+import { clones } from "@/lib/clones";
 import { notifications } from "@/lib/notifications";
 import { CRAFT_LABEL, type Craft } from "@/lib/types";
 
@@ -159,12 +160,20 @@ function Detail({ e }: { e: AtelierEntry }) {
   const toast = useToast();
   const router = useRouter();
   const [share, setShare] = useState(false);
+  const key = `atelier:${e.id}`;
+  /** the copy already taken from this entry (pressing again opens it instead of duplicating) */
+  const [copyId, setCopyId] = useState(() => clones.get(key));
 
   const take = () => {
+    const existing = clones.get(key);
+    if (existing) return router.push(`/maker/${existing}`);
     const w = atelier.importToWorks(e.id);
     if (!w) return;
+    clones.set(key, w.id);
+    setCopyId(w.id);
     notifications.add({ kind: "atelier_import", title: `아뜰리에의 ‘${e.title}’ 도안을 내 도안으로 가져왔어요`, href: `/maker/${w.id}` });
-    toast("내 도안으로 가져왔어요", { label: "열기", run: () => router.push(`/maker/${w.id}`) });
+    toast("내 도안으로 가져왔어요");
+    router.push(`/maker/${w.id}`);
   };
   const remove = () => {
     if (!confirm(`‘${e.title}’ 도안을 아뜰리에에서 내릴까요? 내 도안에는 영향이 없어요.`)) return;
@@ -203,8 +212,9 @@ function Detail({ e }: { e: AtelierEntry }) {
           </div>
           <div className="flex flex-col gap-x2">
             <Button variant="primary" onClick={take}>
-              내 도안으로 가져오기
+              {copyId ? "가져옴 · 열기" : "내 도안으로 가져오기"}
             </Button>
+            {copyId && <p className="t2-regular text-fg-neutral-subtle">이미 내 도안으로 가져왔어요. 누르면 그 사본을 열어요.</p>}
             <Button onClick={() => setShare(true)}>링크로 공유</Button>
           </div>
           <section className="border-t border-stroke-neutral-muted pt-x4">
