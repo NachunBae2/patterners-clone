@@ -4,12 +4,14 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { use } from "react";
 import { useWork } from "@/lib/store";
-import type { CrochetData, GridData, KnitData } from "@/lib/types";
+import type { ApparelData, CrochetData, GridData, KnitData, PaperData } from "@/lib/types";
 
 const Loading = () => <div className="flex h-dvh items-center justify-center text-[0.875rem] text-fg-neutral-muted">도안을 여는 중</div>;
 const CrochetEditor = dynamic(() => import("@/components/editor/crochet/CrochetEditor"), { ssr: false, loading: Loading });
 const KnitEditor = dynamic(() => import("@/components/editor/knitting/KnitEditor"), { ssr: false, loading: Loading });
 const GridEditor = dynamic(() => import("@/components/editor/grid/GridEditor"), { ssr: false, loading: Loading });
+const ApparelEditor = dynamic(() => import("@/components/editor/apparel/ApparelEditor"), { ssr: false, loading: Loading });
+const PaperEditor = dynamic(() => import("@/components/editor/paper/PaperEditor"), { ssr: false, loading: Loading });
 
 export default function MakerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -28,5 +30,7 @@ export default function MakerPage({ params }: { params: Promise<{ id: string }> 
 
   if (work.craft === "crochet") return <CrochetEditor work={work} data={work.data as CrochetData} />;
   if (work.craft === "knitting") return <KnitEditor work={work} data={work.data as KnitData} />;
+  if (work.craft === "apparel") return <ApparelEditor work={work} data={work.data as ApparelData} />;
+  if (work.craft === "paper") return <PaperEditor work={work} data={work.data as PaperData} />;
   return <GridEditor work={work} data={work.data as GridData} />;
 }

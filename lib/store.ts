@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { uid } from "./id";
 import { versions } from "./versions";
-import type { Craft, CrochetData, GridData, KnitData, Work, WorkData } from "./types";
+import type { ApparelData, Craft, CrochetData, GridData, KnitData, PaperData, Work, WorkData } from "./types";
 
 const INDEX_KEY = "pt:works";
 const workKey = (id: string) => `pt:work:${id}`;
@@ -84,6 +84,43 @@ export function emptyData(craft: Craft): WorkData {
     };
     return d;
   }
+  if (craft === "apparel") {
+    // M size, regular fit, set-in sleeve pullover (Apparel defaults)
+    const d: ApparelData = {
+      style: "setIn",
+      cardigan: false,
+      neckline: "round",
+      craft: "knit",
+      size: "M",
+      fit: "regular",
+      measure: {
+        bust: 88,
+        bodyLength: 60,
+        shoulderWidth: 38,
+        armholeDepth: 19,
+        sleeveLength: 56,
+        upperArm: 28,
+        cuffWidth: 18,
+        neckWidth: 17,
+        frontNeckDepth: 8,
+        backNeckDepth: 2,
+        shoulderDrop: 2,
+        hemRib: 5,
+        cuffRib: 5,
+      },
+      ease: { bust: 10, armhole: 2, upperArm: 4 },
+      gauge: { sts: 22, rows: 30 },
+      bandWidth: 3,
+      buttons: 5,
+      showDims: true,
+      overlay: null,
+    };
+    return d;
+  }
+  if (craft === "paper") {
+    const d: PaperData = { blocks: [{ id: uid(), type: "paragraph", text: "" }], showTitle: true };
+    return d;
+  }
   const pageId = uid();
   const cols = 40;
   const rows = 30;
@@ -101,6 +138,8 @@ const NEW_TITLE: Record<Craft, string> = {
   crochet: "새 코바늘 도안",
   knitting: "새 대바늘 도안",
   grid: "새 배색·방안 도안",
+  apparel: "새 의류 도안",
+  paper: "새 페이퍼",
 };
 
 // ---------- API ----------

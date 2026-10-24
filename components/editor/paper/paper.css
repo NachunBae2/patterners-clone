@@ -1,0 +1,41 @@
+/* 페이퍼 editor-only rules (the exported document uses PAPER_CSS alone). */
+.pp-doc textarea.pp-input {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  display: block;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+}
+.pp-doc textarea.pp-input::placeholder {
+  color: #b4b8be;
+}
+.pp-doc table.pp-table textarea.pp-input {
+  min-width: 3em;
+}
+.pp-block {
+  position: relative;
+  border-radius: 6px;
+}
+.pp-block::before {
+  content: "";
+  position: absolute;
+  inset: -4px -8px;
+  border-radius: 8px;
+  pointer-events: none;
+  border: 1px solid transparent;
+}
+.pp-block:hover::before {
+  border-color: #e3e5e8;
+}
+.pp-block[data-selected]::before {
+  border-color: var(--seed-color-stroke-brand-solid, #6d9c1c);
+}

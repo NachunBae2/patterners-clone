@@ -47,9 +47,11 @@ const NEW_TITLE: Record<Craft, string> = {
   crochet: "새 코바늘 도안",
   knitting: "새 대바늘 도안",
   grid: "새 배색·방안 도안",
+  apparel: "새 의류 도안",
+  paper: "새 페이퍼",
 };
 
-type Kind = Craft | "apparel" | "paper";
+type Kind = Craft;
 /** Create buttons, in reference order, with their square badge colours. */
 const CREATE: { kind: Kind; label: string; color: string; Glyph: (p: { className?: string }) => ReactNode }[] = [
   { kind: "crochet", label: "코바늘", color: "var(--seed-color-bg-brand-solid)", Glyph: CrochetGlyph },
@@ -181,7 +183,8 @@ export default function HomePage() {
 
   const visible = useMemo(() => {
     const live = list.filter((w) => (view === "trash" ? !!w.deletedAt : !w.deletedAt));
-    const byView = view === "all" || view === "trash" ? live : live.filter((w) => w.craft === view);
+    const craft = view === "papers" ? "paper" : view;
+    const byView = view === "all" || view === "trash" ? live : live.filter((w) => w.craft === craft);
     return byView
       .filter((w) => matches(w.title, query))
       .sort((a, b) => (sort === "updated" ? b.updatedAt - a.updatedAt : b.createdAt - a.createdAt));
@@ -191,7 +194,6 @@ export default function HomePage() {
   const hasLive = list.some((w) => !w.deletedAt);
 
   const create = (kind: Kind) => {
-    if (kind === "apparel" || kind === "paper") return soon();
     const w = works.create(kind, nextTitle(list, kind));
     router.push(`/maker/${w.id}`);
   };

@@ -1,0 +1,23 @@
+/* Print-only sheet rendered into <body> by PrintPortal (의류·페이퍼). */
+[data-print-sheet] {
+  display: none;
+}
+@media print {
+  body:has(> [data-print-sheet]) > *:not([data-print-sheet]) {
+    display: none !important;
+  }
+  body:has(> [data-print-sheet]) {
+    background: #fff !important;
+  }
+  body > [data-print-sheet] {
+    display: block;
+    color: #1a1c20;
+    font-family: Pretendard, -apple-system, "Apple SD Gothic Neo", sans-serif;
+  }
+  [data-print-sheet] .print-avoid {
+    break-inside: avoid;
+  }
+  [data-print-sheet] .print-break {
+    break-before: page;
+  }
+}
