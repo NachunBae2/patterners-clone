@@ -431,10 +431,14 @@ function expand(nodes: Node[], avail: number | null, issues: string[]): { ids: s
 
 // ---------------- lines ----------------
 
-type RowSpec = { rows: number[]; side?: Side; nodes: Node[] | "asis"; line: number };
+/** copy = these rows repeat rows from–to of the pattern ("3~4단: 1~2단 반복") */
+type RowSpec = { rows: number[]; side?: Side; nodes: Node[] | "asis"; line: number; copy?: { from: number; to: number } };
 type Rule = { which: "even" | "odd" | "RS" | "WS"; nodes: Node[] | "asis"; line: number };
 
 const SIDE_WORD: Record<string, Side> = { rs: "RS", ws: "WS", 겉면: "RS", 안면: "WS", 겉: "RS", 안: "WS", "right side": "RS", "wrong side": "WS" };
+/** a row body that repeats earlier rows: "1~2단 반복", "1-2단을 반복", "1단과 2단 반복", "1단과 같이", "rep rows 1-2", "work as row 1" */
+const KO_COPY = /^(\d+)\s*(?:단)?\s*(?:(?:[-~]|부터|과|와|및|,)\s*(\d+)\s*)?단\s*(?:까지)?\s*(?:을|를|과|와)?\s*(?:반복|똑같이|같이|같게|처럼|대로)(?:\s*(?:뜨기|떠요|떠\s*주세요|해요|합니다|하기))?\.?$/;
+const EN_COPY = /^(?:rep(?:eat)?|work(?:\s+as)?|as|same as)\s*rows?\s*(\d+)(?:\s*(?:-|to|and|&)\s*(\d+))?\.?$/i;
 const ASIS = /^(?:knit the knits and purl the purls|k the k sts and p the p sts|work (?:all )?sts as they (?:appear|present)|코\s*모양대로(?:\s*뜨기)?|보이는\s*대로(?:\s*뜨기)?|겉은\s*겉(?:뜨기)?\s*,?\s*안은\s*안(?:뜨기)?(?:으로)?(?:\s*뜨기)?)\.?$/i;
 
 function rangeOf(a: string, b?: string): number[] {
@@ -472,11 +476,12 @@ export function parseWritten(text: string, opt: ParseOptions = DEFAULT_PARSE): P
       return;
     }
     // repeat rows: "Rep rows 1-4 3 more times" / "1~4단을 3번 더 반복"
-    if ((m = s.match(/^rep(?:eat)?\s*rows?\s*(\d+)\s*(?:-|to|and)\s*(\d+)\s*(?:(\d+)\s*(more\s+)?times?)?/i)) || (m = s.match(/^(\d+)\s*[-~]\s*(\d+)\s*단(?:을|를)?\s*(?:(\d+)\s*(?:번|회)\s*(더\s*)?)?반복/))) {
+    if ((m = s.match(/^rep(?:eat)?\s*rows?\s*(\d+)\s*(?:-|to|and)\s*(\d+)\s*(?:(\d+)\s*(more\s+)?times?)?/i)) || (m = s.match(/^(\d+)\s*(?:단)?\s*(?:[-~]|과|와|및|,)\s*(\d+)\s*단(?:을|를)?\s*(?:(\d+)\s*(?:번|회)\s*(더\s*)?)?반복/)) || (m = s.match(/^(\d+)()\s*단(?:을|를)?\s*(?:(\d+)\s*(?:번|회)\s*(더\s*)?)?반복/))) {
+      if (!m[2]) m[2] = m[1];
       const times = m[3] ? +m[3] + (m[4] ? 0 : -1) : 1;
       repeats.push({ from: Math.min(+m[1], +m[2]), to: Math.max(+m[1], +m[2]), times: Math.max(1, times), line: lineNo });
       rep.kind = "repeat";
-      rep.label = `${Math.min(+m[1], +m[2])}–${Math.max(+m[1], +m[2])}단 ${Math.max(1, times)}번 더`;
+      rep.label = `${+m[1] === +m[2] ? `${m[1]}단` : `${Math.min(+m[1], +m[2])}–${Math.max(+m[1], +m[2])}단`} ${Math.max(1, times)}번 더`;
       return;
     }
 
@@ -523,6 +528,17 @@ export function parseWritten(text: string, opt: ParseOptions = DEFAULT_PARSE): P
       rep.issues.push("뜨는 방법이 없어요");
       return;
     }
+    const cp = s.match(KO_COPY) ?? s.match(EN_COPY);
+    if (cp && rows) {
+      const from = Math.min(+cp[1], +(cp[2] ?? cp[1]));
+      const to = Math.max(+cp[1], +(cp[2] ?? cp[1]));
+      specs.push({ rows, side, nodes: [], line: lineNo, copy: { from, to } });
+      autoRow = Math.max(autoRow, ...rows);
+      rep.kind = "row";
+      const lab = rows.length > 1 ? `${rows[0]}–${rows[rows.length - 1]}단` : `${rows[0]}단`;
+      rep.label = `${lab} = ${from === to ? `${from}단` : `${from}–${to}단`}`;
+      return;
+    }
     let nodes: Node[] | "asis";
     if (ASIS.test(s)) nodes = "asis";
     else {
@@ -565,6 +581,21 @@ export function parseWritten(text: string, opt: ParseOptions = DEFAULT_PARSE): P
   // row number → instruction
   const byRow = new Map<number, RowSpec>();
   for (const sp of specs) for (const r of sp.rows) byRow.set(r, sp);
+  // rows that repeat earlier rows take those rows' instructions, cycling through the range
+  for (const r of [...byRow.keys()].sort((a, b) => a - b)) {
+    const sp = byRow.get(r)!;
+    if (!sp.copy) continue;
+    const len = sp.copy.to - sp.copy.from + 1;
+    const src = sp.copy.from + (sp.rows.indexOf(r) % len);
+    const from = src < r ? byRow.get(src) : undefined;
+    const lr = lines.find((l) => l.line === sp.line);
+    if (!from || from.copy) {
+      byRow.delete(r);
+      if (lr && !lr.issues.some((x) => x.startsWith(`${src}단`))) lr.issues.push(src >= r ? `${src}단은 이 단보다 앞에 있어야 반복할 수 있어요` : `${src}단 설명이 없어 반복할 수 없어요`);
+      continue;
+    }
+    byRow.set(r, { ...from, rows: [r], side: sp.side, line: sp.line, copy: undefined });
+  }
   let maxRow = byRow.size ? Math.max(...byRow.keys()) : 0;
   for (const rp of repeats) {
     const len = rp.to - rp.from + 1;

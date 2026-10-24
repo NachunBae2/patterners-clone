@@ -29,6 +29,8 @@ export function Rail(p: {
   tab: RailTab | null;
   onTab: (t: RailTab) => void;
   onPreview: () => void;
+  /** the knitted-look preview window is open */
+  previewOn?: boolean;
   onAtelier: () => void;
   onShare: () => void;
   onExport: () => void;
@@ -51,7 +53,7 @@ export function Rail(p: {
         </RailButton>
         <span className="inline-flex">
           <span className="relative">
-            <RailButton label="뜬 모습 미리보기" pressed={false} onClick={p.onPreview}>
+            <RailButton label="뜬 모습 미리보기" active={!!p.previewOn} pressed={!!p.previewOn} onClick={p.onPreview}>
               <LRotate3d className="seed-icon" />
             </RailButton>
             <span className="t1-bold pointer-events-none absolute -right-1 -top-1 rounded-r1 bg-bg-brand-weak px-x1 text-fg-brand">β</span>

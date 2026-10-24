@@ -515,7 +515,7 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
       <ShareDialog open={appDialog === "share"} onClose={() => setAppDialog(null)} work={{ title, craft: "grid", data: doc }} />
       <AtelierDialog open={appDialog === "atelier"} onClose={() => setAppDialog(null)} work={{ id: work.id, title, craft: "grid", data: doc }} />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <Rail tab={tab} onTab={onTab} onPreview={() => (doc.mode === "knit" ? setPreview((v) => !v) : toast("뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요"))} onAtelier={() => setAppDialog("atelier")} onShare={() => setAppDialog("share")} onExport={() => setExportOpen(true)} />
+        <Rail tab={tab} onTab={onTab} onPreview={() => (doc.mode === "knit" ? setPreview((v) => !v) : toast("뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요"))} previewOn={preview && doc.mode === "knit"} onAtelier={() => setAppDialog("atelier")} onShare={() => setAppDialog("share")} onExport={() => setExportOpen(true)} />
 
         {leftOpen && (
           <div className="absolute inset-y-0 left-14 z-[60] h-full shadow-s3 lg:relative lg:left-0 lg:z-auto lg:shadow-none">

@@ -83,7 +83,7 @@ function ctxGrid(c: AssistantCtx): { g: KGrid | null; note: string } {
   const g = c.doc.grids.find((x) => x.id === (c.sel?.gridId ?? c.activeId)) ?? null;
   if (g) return { g, note: "" };
   const first = c.doc.grids.find((x) => x.visible) ?? c.doc.grids[0] ?? null;
-  if (first) return { g: first, note: `선택한 격자가 없어서 ${first.name} 격자에 반영해요. ` };
+  if (first) return { g: first, note: `선택한 격자가 없어서 「${first.name}」에 반영해요. ` };
   return { g: null, note: "" };
 }
 
@@ -305,7 +305,8 @@ export function interpret(input: string, c: AssistantCtx): AssistantResult {
     if (!n) return { reply: "바꿀 칸이 없었어요. 단·코 범위를 다시 확인해 주세요." };
     return { reply: `${note}${reg.what}의 색 ${n}칸을 지웠어요.`, next: setGrid(c.doc, ng), activate: g.id, changed: true };
   }
-  if (/(지워|지우기|지우|비워|비우기|삭제|clear|erase)/i.test(text) && !/격자\s*삭제/.test(text)) {
+  // "바늘비우기" (yarn over) is a stitch, not "비우기" (empty)
+  if (/(지워|지우기|지우|비워|비우기|삭제|clear|erase)/i.test(text.replace(/바늘\s*비우기/g, "")) && !/격자\s*삭제/.test(text)) {
     const reg = regionOf(text, g, c.sel);
     if ("error" in reg) return { reply: reg.error };
     const ng = clearRect(g, reg.rect);
