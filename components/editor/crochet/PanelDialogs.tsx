@@ -144,7 +144,7 @@ export function VersionDialog({
               return (
                 <li key={v.id} data-version={v.id} className={cx("flex items-center gap-x3 border-b border-stroke-neutral-muted py-x2 last:border-b-0", viewing === v.id && "bg-bg-brand-weak")}>
                   <button type="button" onClick={() => setViewing(v.id)} title="미리보기" aria-label={`${versionTime(v.at)} 미리보기`} className="flex size-12 shrink-0 items-center justify-center rounded-r2 border border-stroke-neutral-muted bg-white hover:border-stroke-neutral-contrast">
-                    <ChartPreview items={items} width={44} height={44} pad={3} />
+                    {items.length ? <ChartPreview items={items} width={44} height={44} pad={3} /> : <span className="text-[11px] text-fg-neutral-subtle">빈 도안</span>}
                   </button>
                   <div className="min-w-0 flex-1">
                     {editing === v.id ? (

@@ -177,7 +177,8 @@ class LineParser {
         if (t.v === "(" || t.v === "[" || t.v === "{") {
           this.i++;
           const inner = this.seq(t.v === "(" ? ")" : t.v === "[" ? "]" : "}");
-          items.push(this.withRepeat({ k: "rep", nodes: inner, n: 1 }));
+          const node = this.withRepeat({ k: "rep", nodes: inner, n: 1 });
+          if (inner.length) items.push(node);
           continue;
         }
         if (t.v === "*") {
@@ -395,6 +396,11 @@ export function parsePattern(text: string, opts: { startCount?: number; startLab
     const lineNo = idx + 1;
     const src = raw.trim();
     if (!src) return;
+    // "[폴더 이름]" headers (as 서술도안 copies them) are section titles
+    if (/^\[[^\]]*\]$/.test(src)) {
+      lines.push({ line: lineNo, text: src, kind: "skip", errors: [], warnings: [] });
+      return;
+    }
     let rest = src;
     let from: number | null = null, to: number | null = null;
     let isFoundation = false;
