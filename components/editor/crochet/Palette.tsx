@@ -56,7 +56,7 @@ export const MyIconPreview = memo(function MyIconPreview({ icon, size = 40, clas
 const STATUS_LABEL: Record<SaveStatus, string> = { saved: "저장됨", saving: "저장 중", error: "저장 실패" };
 
 /** Title row: doc title (click to rename), save status, panel toggle. */
-function TitleRow({ title, onRename, status, onCollapse }: Pick<Props, "title" | "onRename" | "status" | "onCollapse">) {
+export function TitleRow({ title, onRename, status, onCollapse }: Pick<Props, "title" | "onRename" | "status" | "onCollapse">) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const commit = () => {

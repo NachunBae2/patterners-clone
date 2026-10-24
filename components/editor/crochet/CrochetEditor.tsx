@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Dialog, IconButton, Menu, NumberField, cx, isMod, useToast, type MenuItem } from "@/components/app/ui";
-import { exportSvg, safeName, svgThumbnail } from "@/lib/export";
+import { download, exportSvg, safeName, svgThumbnail } from "@/lib/export";
 import { uid } from "@/lib/id";
 import { works } from "@/lib/store";
-import type { CrochetData, CrochetItem, CrochetLayer, GatherItem, StitchItem, TextItem, View, Work } from "@/lib/types";
+import type { CrochetData, CrochetFolder, CrochetItem, CrochetLayer, GatherItem, StitchItem, StrokeItem, TextItem, View, Work } from "@/lib/types";
+import { versions, type Version } from "@/lib/versions";
 import { useAutosave } from "@/lib/useAutosave";
 import { useHistory } from "@/lib/useHistory";
 import { INK, STROKE_WIDTH, defaultSpread, getSymbol, symbolSize } from "@/lib/symbols/crochet";
@@ -23,17 +24,21 @@ import {
   linearPlacements,
   moveItem,
   normDeg,
+  geomFoot,
+  heightFactor,
   placeTemplate,
   radialAutoCount,
   radialPlacements,
   rotateItem,
+  setStitchHeights,
   snap,
+  stitchGeom,
   stitchTransform,
   unionBounds,
   type Box,
   type Pt,
 } from "./geometry";
-import { ExportDialog, ShortcutDialog, type ShortcutGroup } from "./EditorDialogs";
+import { ExportDialog, ShortcutDialog, type ExportFormat, type ShortcutGroup } from "./EditorDialogs";
 import { MyIconPreview, Palette, type PaletteTab, type Picked } from "./Palette";
 import { Rail, type NavTab } from "./Rail";
 import { BTN, el, sab } from "./seed";
@@ -44,10 +49,16 @@ import { makerTourSteps } from "@/components/tour/makerSteps";
 import { myIcons, useMyIcons } from "./myIcons";
 import { ItemsPreview, LayerView } from "./render";
 import { RightPanel, type LayerActions, type PropActions } from "./RightPanel";
+import { interpret } from "./assistant";
+import { insertChart, insertLayersAsFolder, nextFolderName, type Doc } from "./docops";
+import { HeightsDialog, VersionDialog, versionTime } from "./PanelDialogs";
+import { AssistantPanel, ImportPanel, TemplatePanel, type ChatMsg, type ImportOptions } from "./SidePanels";
+import type { ParseResult } from "./parser";
+import { WrittenPanel } from "./WrittenPanel";
+import { TEMPLATES } from "./templates";
 
 // ---------- types ----------
 
-type Doc = Omit<CrochetData, "view">;
 type Template = { items: CrochetItem[]; w: number; h: number };
 
 type Drag =
@@ -69,7 +80,11 @@ type Drag =
   | { k: "rotate"; center: Pt; startAngle: number; orig: Map<string, CrochetItem>; started: boolean }
   | { k: "stretch"; orig: StitchItem; base: number; axis: "v" | "h"; started: boolean }
   | { k: "linear"; a: Pt }
-  | { k: "radial"; start: Pt; fromCenter: boolean };
+  | { k: "radial"; start: Pt; fromCenter: boolean }
+  | { k: "vertex"; id: string; i: number; started: boolean };
+
+/** Left panel content: the symbol palette tabs or one of the rail's other panels. */
+type LeftTab = PaletteTab | "library" | "aiConvert" | "ai";
 
 type LinearDraft = { a: Pt; b: Pt; count: number; final: boolean };
 type RadialDraft = { c: Pt; rx: number; ry: number; count: number; final: boolean };
@@ -166,7 +181,76 @@ function normalize(d: CrochetData): CrochetData {
   let slots = d.quickSlots ?? [];
   if (!slots.length || JSON.stringify(slots) === JSON.stringify(LEGACY_DEFAULT_SLOTS)) slots = DEFAULT_SLOTS;
   const quickSlots = [...slots, null, null, null, null, null].slice(0, 5);
-  return { layers, activeLayerId, quickSlots, showGrid: d.showGrid ?? true, view: d.view ?? { x: 0, y: 0, zoom: 1 } };
+  // optional fields added later (folders, background, stitch heights): absent in older charts
+  const folders = (Array.isArray(d.folders) ? d.folders : []).filter((f): f is CrochetFolder => !!f && typeof f.id === "string" && typeof f.name === "string");
+  const known = new Set(folders.map((f) => f.id));
+  if (layers.some((l) => l.folderId && !known.has(l.folderId)))
+    layers = layers.map((l) => {
+      if (!l.folderId || known.has(l.folderId)) return l;
+      const c = { ...l };
+      delete c.folderId;
+      return c;
+    });
+  return {
+    layers,
+    activeLayerId,
+    quickSlots,
+    showGrid: d.showGrid ?? true,
+    view: d.view ?? { x: 0, y: 0, zoom: 1 },
+    ...(folders.length ? { folders } : {}),
+    ...(typeof d.background === "string" ? { background: d.background } : {}),
+    ...(typeof d.backgroundOpacity === "number" ? { backgroundOpacity: Math.max(0, Math.min(100, d.backgroundOpacity)) } : {}),
+    ...(d.heights && typeof d.heights === "object" ? { heights: d.heights } : {}),
+  };
+}
+
+function docOf(d: CrochetData): Doc {
+  const out: Partial<CrochetData> = { ...d };
+  delete out.view;
+  return out as Doc;
+}
+
+const DEFAULT_BG = "#ffffff";
+/** CSS colour for the canvas background (hex + opacity %). */
+function bgColor(hex: string | undefined, pct: number | undefined) {
+  const c = hex ?? DEFAULT_BG;
+  const a = (pct ?? 100) / 100;
+  if (a >= 1 && c === DEFAULT_BG) return "rgb(255, 255, 255)";
+  const m = c.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!m) return c;
+  const [r, g, b] = [m[1], m[2], m[3]].map((x) => parseInt(x, 16));
+  return a >= 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/** Path-like symbols that "경로 편집" turns into an editable stroke: their outline in world coordinates. */
+function pathOutline(it: CrochetItem): { points: [number, number][]; closed: boolean } | null {
+  if (it.type === "stroke") return { points: it.points, closed: !!it.closed };
+  if (it.type !== "stitch") return null;
+  const s = getSymbol(it.symbol);
+  if (!s) return null;
+  const { w, h } = itemGeom(it);
+  let local: [number, number][];
+  let closed = true;
+  if (s.id === "shape_line") {
+    local = [[-w / 2 + 1, 0], [w / 2 - 1, 0]];
+    closed = false;
+  } else if (s.id === "shape_rect") local = [[-w / 2 + 2, -h / 2 + 2], [w / 2 - 2, -h / 2 + 2], [w / 2 - 2, h / 2 - 2], [-w / 2 + 2, h / 2 - 2]];
+  else if (s.id === "shape_triangle") local = [[0, -h / 2 + 2], [w / 2 - 2, h / 2 - 2], [-w / 2 + 2, h / 2 - 2]];
+  else if (s.id === "shape_star") {
+    const r = w / 2 - 1.5;
+    local = Array.from({ length: 10 }, (_, i) => {
+      const a = ((-90 + i * 36) * Math.PI) / 180;
+      const rr = i % 2 ? r * 0.45 : r;
+      return [Math.cos(a) * rr, Math.sin(a) * rr] as [number, number];
+    });
+  } else return null;
+  const rad = (it.rotation * Math.PI) / 180;
+  const c = Math.cos(rad), sn = Math.sin(rad);
+  const points = local.map(([x, y]) => {
+    const fx = it.flipH ? -x : x, fy = it.flipV ? -y : y;
+    return [Math.round((it.x + fx * c - fy * sn) * 100) / 100, Math.round((it.y + fx * sn + fy * c) * 100) / 100] as [number, number];
+  });
+  return { points, closed };
 }
 
 function mapItems(d: Doc, ids: Set<string>, fn: (it: CrochetItem) => CrochetItem | null): Doc {
@@ -238,8 +322,11 @@ const pickName = (p: Picked) => (!p ? "" : p.kind === "symbol" ? getSymbol(p.id)
 export default function CrochetEditor({ work, data }: { work: Work; data: CrochetData }) {
   const toast = useToast();
   const init = useMemo(() => normalize(data), [data]);
-  const h = useHistory<Doc>({ layers: init.layers, activeLayerId: init.activeLayerId, quickSlots: init.quickSlots, showGrid: init.showGrid });
+  const h = useHistory<Doc>(docOf(init));
   const doc = h.state;
+  // 기호 높이 applies to every geometry call below; hk re-renders memoised items when it changes
+  const hk = setStitchHeights(doc.heights);
+  const folders = useMemo(() => doc.folders ?? [], [doc.folders]);
   const [view, setView] = useState<View>(init.view);
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -253,7 +340,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     setSelectionState(ids);
   }, []);
 
-  const [tab, setTab] = useState<PaletteTab>("symbols");
+  const [tab, setTab] = useState<LeftTab>("symbols");
   const narrowRef = useRef(false);
   const [query, setQuery] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
@@ -285,6 +372,19 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tour, setTour] = useState(false);
+  const [writtenOpen, setWrittenOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [heightsOpen, setHeightsOpen] = useState(false);
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [pathVertex, setPathVertex] = useState<number | null>(null);
+  const lastVertexDown = useRef<{ i: number; t: number } | null>(null);
+  const [pathEdit, setPathEditState] = useState<string | null>(null);
+  const pathEditRef = useRef<string | null>(null);
+  const setPathEdit = useCallback((id: string | null) => {
+    pathEditRef.current = id;
+    setPathEditState(id);
+    setPathVertex(null);
+  }, []);
   const [title, setTitle] = useState(work.title);
   const [savedAt, setSavedAt] = useState(work.updatedAt);
   const icons = useMyIcons();
@@ -322,9 +422,9 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
 
   const saveData = useMemo<CrochetData>(() => ({ ...doc, view }), [doc, view]);
   const thumb = useCallback(() => {
-    const svg = buildSvg(doc.layers, { fit: { w: 320, h: 240 }, margin: 16, background: "#ffffff" });
+    const svg = buildSvg(doc.layers, { fit: { w: 320, h: 240 }, margin: 16, background: doc.background ?? "#ffffff" });
     return svgThumbnail(svg ?? `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="#ffffff"/></svg>`);
-  }, [doc.layers]);
+  }, [doc.layers, doc.background]);
   const status = useAutosave(work.id, saveData, thumb);
   // last save time of the chart itself (view-only saves keep the stamp)
   const prevStatus = useRef(status);
@@ -340,8 +440,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     },
     [work.id],
   );
-  const soon = useCallback((what?: string) => toast(what ? `${what} · 준비 중이에요` : "준비 중이에요"), [toast]);
-  const openPalette = useCallback((t: PaletteTab) => {
+  const openPalette = useCallback((t: LeftTab) => {
     setTab(t);
     setPaletteOpen(true);
   }, []);
@@ -467,6 +566,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const setMode = useCallback(
     (m: Mode) => {
       if (m !== "pen") commitPen();
+      if (m !== "select") setPathEdit(null);
       setLinear(null);
       setRadial(null);
       setAssignSlot(null);
@@ -480,7 +580,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       }
       setModeState(m);
     },
-    [commitPen, h],
+    [commitPen, h, setPathEdit],
   );
 
   const pick = useCallback(
@@ -712,6 +812,29 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     setSelection(newIds);
   }, [h, selectedDocOrder, setSelection]);
 
+  const deleteVertex = useCallback(
+    (i: number) => {
+      const id = pathEditRef.current;
+      if (!id) return;
+      const found = findItem(h.get(), id);
+      if (!found || found.item.type !== "stroke") return;
+      if (found.item.points.length <= 2) {
+        toast("점이 두 개 남은 선은 더 지울 수 없어요");
+        return;
+      }
+      h.set((d) =>
+        mapItems(d, new Set([id]), (it) => {
+          if (it.type !== "stroke") return it;
+          const next: StrokeItem = { ...it, points: it.points.filter((_, j) => j !== i) };
+          if (next.closed && next.points.length < 3) delete next.closed;
+          return next;
+        }),
+      );
+      setPathVertex(null);
+    },
+    [h, toast],
+  );
+
   const selectAll = useCallback(() => {
     const d = h.get();
     const ids = d.layers.filter((l) => l.visible && !l.locked && (!activeOnly || l.id === d.activeLayerId)).flatMap((l) => l.items.map((i) => i.id));
@@ -741,7 +864,9 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     () => ({
       add: () => {
         const d = h.get();
-        const layer: CrochetLayer = { id: uid(), name: nextLayerName(d.layers), visible: true, items: [] };
+        const active = d.layers.find((l) => l.id === d.activeLayerId);
+        const scope = active?.folderId ? d.layers.filter((l) => l.folderId === active.folderId) : d.layers.filter((l) => !l.folderId);
+        const layer: CrochetLayer = { id: uid(), name: nextLayerName(scope.length ? scope : d.layers), visible: true, items: [], ...(active?.folderId ? { folderId: active.folderId } : {}) };
         const i = d.layers.findIndex((l) => l.id === d.activeLayerId);
         const layers = [...d.layers];
         layers.splice(i + 1, 0, layer);
@@ -769,8 +894,80 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         }),
       activate: (id) => h.set((d) => (d.activeLayerId === id ? d : { ...d, activeLayerId: id })),
       setColor: (id, color) => h.set((d) => ({ ...d, layers: d.layers.map((l) => (l.id === id ? { ...l, color } : l)) })),
+      place: (id, to, folderId) =>
+        h.set((d) => {
+          const from = d.layers.findIndex((l) => l.id === id);
+          if (from < 0) return d;
+          const layers = [...d.layers];
+          const [l] = layers.splice(from, 1);
+          const moved: CrochetLayer = { ...l };
+          if (folderId) moved.folderId = folderId;
+          else delete moved.folderId;
+          layers.splice(Math.max(0, Math.min(layers.length, to)), 0, moved);
+          return { ...d, layers };
+        }),
+      addFolder: () => {
+        const d = h.get();
+        const f: CrochetFolder = { id: uid(), name: nextFolderName(d) };
+        const active = d.layers.find((l) => l.id === d.activeLayerId);
+        // the active layer goes into the new folder when it is not in one yet
+        const layers = active && !active.folderId ? d.layers.map((l) => (l.id === active.id ? { ...l, folderId: f.id } : l)) : d.layers;
+        h.set({ ...d, folders: [...(d.folders ?? []), f], layers });
+        toast(active && !active.folderId ? `「${f.name}」을(를) 만들고 ${active.name}을(를) 넣었어요` : `「${f.name}」을(를) 만들었어요`);
+      },
+      renameFolder: (id, name) => h.set((d) => ({ ...d, folders: (d.folders ?? []).map((f) => (f.id === id ? { ...f, name } : f)) })),
+      toggleFolder: (id) =>
+        h.set((d) => {
+          const members = d.layers.filter((l) => l.folderId === id);
+          if (!members.length) return d;
+          const show = !members.some((l) => l.visible);
+          return { ...d, layers: d.layers.map((l) => (l.folderId === id ? { ...l, visible: show } : l)) };
+        }),
+      collapseFolder: (id) => h.set((d) => ({ ...d, folders: (d.folders ?? []).map((f) => (f.id === id ? { ...f, collapsed: !f.collapsed } : f)) })),
+      ungroupFolder: (id) =>
+        h.set((d) => ({
+          ...d,
+          folders: (d.folders ?? []).filter((f) => f.id !== id),
+          layers: d.layers.map((l) => {
+            if (l.folderId !== id) return l;
+            const c = { ...l };
+            delete c.folderId;
+            return c;
+          }),
+        })),
+      deleteFolder: (id) =>
+        h.set((d) => {
+          const layers = d.layers.filter((l) => l.folderId !== id);
+          const activeLayerId = layers.some((l) => l.id === d.activeLayerId) ? d.activeLayerId : (layers[layers.length - 1]?.id ?? "");
+          return { ...d, folders: (d.folders ?? []).filter((f) => f.id !== id), layers, activeLayerId };
+        }),
+      moveToFolder: (layerId, folderId) =>
+        h.set((d) => {
+          const from = d.layers.findIndex((l) => l.id === layerId);
+          if (from < 0 || (d.layers[from].folderId ?? null) === folderId) return d;
+          const layers = [...d.layers];
+          const [l] = layers.splice(from, 1);
+          const moved: CrochetLayer = { ...l };
+          if (folderId) moved.folderId = folderId;
+          else delete moved.folderId;
+          // keep a folder's layers next to each other, in their stacking order:
+          // a layer from below joins under the folder's lowest layer, one from above over its top-most
+          let at = from;
+          if (folderId) {
+            const ids = layers.map((x) => x.folderId);
+            const first = ids.indexOf(folderId), last = ids.lastIndexOf(folderId);
+            if (first >= 0) at = from <= first ? first : from > last ? last + 1 : from;
+          }
+          layers.splice(at, 0, moved);
+          return { ...d, layers };
+        }),
+      newFolderWith: (layerId) => {
+        const d = h.get();
+        const f: CrochetFolder = { id: uid(), name: nextFolderName(d) };
+        h.set({ ...d, folders: [...(d.folders ?? []), f], layers: d.layers.map((l) => (l.id === layerId ? { ...l, folderId: f.id } : l)) });
+      },
     }),
-    [h],
+    [h, toast],
   );
 
   const propActions = useMemo<PropActions>(
@@ -859,6 +1056,39 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     const snapOn = !isMod(e);
     svg.setPointerCapture(e.pointerId);
 
+    if (mode === "select" && pathEditRef.current) {
+      const id = pathEditRef.current;
+      const found = findItem(h.get(), id);
+      const vtx = target.closest("[data-vertex]")?.getAttribute("data-vertex");
+      const seg = target.closest("[data-seg]")?.getAttribute("data-seg");
+      if (found?.item.type === "stroke") {
+        if (vtx != null) {
+          const i = Number(vtx);
+          // Alt+click or a second press on the same point deletes it (pointer capture hides dblclick targets)
+          const last = lastVertexDown.current;
+          lastVertexDown.current = { i, t: e.timeStamp };
+          if (e.altKey || (last && last.i === i && e.timeStamp - last.t < 450)) {
+            lastVertexDown.current = null;
+            deleteVertex(i);
+            return;
+          }
+          setPathVertex(i);
+          dragRef.current = { k: "vertex", id, i, started: false };
+          return;
+        }
+        if (seg != null) {
+          const i = Number(seg);
+          const q = snapPt(P, snapOn);
+          h.set((d) => mapItems(d, new Set([id]), (it) => (it.type === "stroke" ? { ...it, points: [...it.points.slice(0, i + 1), [q.x, q.y] as [number, number], ...it.points.slice(i + 1)] } : it)));
+          setPathVertex(i + 1);
+          // the insert is the undo step; dragging the new point folds into it
+          dragRef.current = { k: "vertex", id, i: i + 1, started: true };
+          return;
+        }
+        if (target.closest("[data-id]")?.getAttribute("data-id") === id) return;
+      }
+      setPathEdit(null);
+    }
     if (mode === "select") {
       const handle = target.closest("[data-handle]")?.getAttribute("data-handle");
       if (handle === "rotate" && selBounds) {
@@ -869,7 +1099,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       if (handle === "stretch" && selItems.length === 1 && selItems[0].type === "stitch") {
         const st = selItems[0];
         const s = getSymbol(st.symbol)!;
-        dragRef.current = { k: "stretch", orig: st, base: s.stretch === "h" ? s.w : s.h, axis: s.stretch === "h" ? "h" : "v", started: false };
+        dragRef.current = { k: "stretch", orig: st, base: s.stretch === "h" ? s.w : s.h * heightFactor(s.id), axis: s.stretch === "h" ? "h" : "v", started: false };
         return;
       }
       const hitId = target.closest("[data-id]")?.getAttribute("data-id");
@@ -986,6 +1216,15 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       case "marquee":
         setMarquee((m) => (m ? { a: m.a, b: P } : m));
         return;
+      case "vertex": {
+        const q = snapPt(P, snapOn);
+        if (!d.started) {
+          d.started = true;
+          h.checkpoint();
+        }
+        h.set((doc) => mapItems(doc, new Set([d.id]), (it) => (it.type === "stroke" ? { ...it, points: it.points.map((p, j) => (j === d.i ? ([q.x, q.y] as [number, number]) : p)) } : it)), { merge: true });
+        return;
+      }
       case "rotate": {
         let deg = ((Math.atan2(P.y - d.center.y, P.x - d.center.x) - d.startAngle) * 180) / Math.PI;
         if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -1000,13 +1239,14 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       }
       case "stretch": {
         const o = d.orig;
-        const { w, h: hh } = itemGeom(o);
+        const g0 = itemGeom(o);
+        const { w, h: hh } = g0;
         const r = (o.rotation * Math.PI) / 180;
         const sV = o.flipV ? -1 : 1, sH = o.flipH ? -1 : 1;
         let dir: Pt, fixed: Pt;
         if (d.axis === "v") {
           dir = { x: Math.sin(r) * sV, y: -Math.cos(r) * sV };
-          fixed = { x: o.x - (dir.x * hh) / 2, y: o.y - (dir.y * hh) / 2 };
+          fixed = { x: o.x - dir.x * geomFoot(g0), y: o.y - dir.y * geomFoot(g0) };
         } else {
           dir = { x: Math.cos(r) * sH, y: Math.sin(r) * sH };
           fixed = { x: o.x - (dir.x * w) / 2, y: o.y - (dir.y * w) / 2 };
@@ -1019,7 +1259,9 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
           d.started = true;
           h.checkpoint();
         }
-        const next: StitchItem = { ...o, scale, x: Math.round((fixed.x + (dir.x * L) / 2) * 100) / 100, y: Math.round((fixed.y + (dir.y * L) / 2) * 100) / 100 };
+        // the new centre sits so the foot stays at `fixed` (기호 높이 lifts tall stitches, see geomFoot)
+        const half = d.axis === "v" ? geomFoot(stitchGeom({ ...o, scale })) : L / 2;
+        const next: StitchItem = { ...o, scale, x: Math.round((fixed.x + dir.x * half) * 100) / 100, y: Math.round((fixed.y + dir.y * half) * 100) / 100 };
         h.set((doc) => mapItems(doc, new Set([o.id]), () => next), { merge: true });
         return;
       }
@@ -1069,6 +1311,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     switch (d.k) {
       case "pan":
         setPanning(false);
+        return;
+      case "vertex":
         return;
       case "move":
         if (!d.orig) {
@@ -1185,6 +1429,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     switch (k) {
       case "Escape":
         if (ctx) return setCtx(null);
+        if (pathEditRef.current) return setPathEdit(null);
         if (pen.length) return setPenPts([]);
         if (linear) return setLinear(null);
         if (radial) return setRadial(null);
@@ -1202,6 +1447,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
         e.preventDefault();
         if (mode === "number") return undoLastNumber();
         if (mode === "pen" && pen.length) return setPenPts(penRef.current.slice(0, -1));
+        if (pathEditRef.current && pathVertex !== null) return deleteVertex(pathVertex);
         deleteSel();
         return;
       case "ArrowLeft":
@@ -1282,13 +1528,123 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   // ---------- export ----------
 
   const onExport = useCallback(
-    async (format: "png" | "jpg" | "svg") => {
-      const svg = buildSvg(h.get().layers, { background: format === "svg" ? undefined : "#ffffff" });
+    async (format: ExportFormat) => {
+      const d = h.get();
+      const name = safeName(works.get(work.id)?.title ?? work.title);
+      if (format === "json") {
+        if (!d.layers.some((l) => l.items.length)) return false;
+        const file = { app: "patterners-clone", kind: "crochet-chart", version: 1, title: works.get(work.id)?.title ?? work.title, craft: "crochet", data: { ...d, view: viewRef.current } };
+        download(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }), `${name}.json`);
+        return true;
+      }
+      const opacity = (d.backgroundOpacity ?? 100) / 100;
+      const bg = format === "svg" ? (d.background || opacity < 1 ? (d.background ?? DEFAULT_BG) : undefined) : format === "jpg" ? (d.background ?? DEFAULT_BG) : (d.background ?? DEFAULT_BG);
+      const svg = buildSvg(d.layers, { background: bg, backgroundOpacity: format === "jpg" ? 1 : opacity });
       if (!svg) return false;
-      await exportSvg(svg, format, safeName(works.get(work.id)?.title ?? work.title));
+      await exportSvg(svg, format, name);
       return true;
     },
     [h, work.id, work.title],
+  );
+
+  // ---------- rail panels: templates, written import, assistant ----------
+
+  const viewCenter = useCallback((): Pt => {
+    const el = svgRef.current;
+    const v = viewRef.current;
+    const W = el?.clientWidth ?? 800, H = Math.max(120, (el?.clientHeight ?? 600) - BOTTOM_CHROME);
+    return { x: Math.round((W / 2 - v.x) / v.zoom), y: Math.round((H / 2 - v.y) / v.zoom) };
+  }, []);
+
+  /** Selects freshly inserted layers and zooms out when they do not fit on screen. */
+  const showInserted = useCallback(
+    (layers: CrochetLayer[], select = true) => {
+      const items = layers.flatMap((l) => l.items);
+      if (select) {
+        setSelection(items.map((i) => i.id));
+        setModeState("select");
+      }
+      const b = unionBounds(items);
+      const el = svgRef.current;
+      if (!b || !el) return;
+      const v = viewRef.current;
+      const W = el.clientWidth, H = el.clientHeight - BOTTOM_CHROME;
+      if ((b.x1 - b.x0) * v.zoom > W - 80 || (b.y1 - b.y0) * v.zoom > H - 80) fitTo(b);
+      else if (b.x0 * v.zoom + v.x < 20 || b.x1 * v.zoom + v.x > W - 20 || b.y0 * v.zoom + v.y < 20 || b.y1 * v.zoom + v.y > H - 20) {
+        // off screen but small enough: pan to it at the current zoom
+        const c = boxCenter(b);
+        setView({ ...v, x: W / 2 - c.x * v.zoom, y: H / 2 - c.y * v.zoom });
+      }
+    },
+    [fitTo, setSelection],
+  );
+
+  const insertTemplate = useCallback(
+    (t: (typeof TEMPLATES)[number], params: Record<string, number>) => {
+      const res = insertChart(h.get(), t.build(params), { layout: t.layout, at: viewCenter(), name: t.name });
+      if (!res.layers.length) return toast("넣지 못했어요. 다시 시도해 주세요.");
+      h.set(res.doc);
+      showInserted(res.layers);
+      toast(`‘${t.name}’ 템플릿을 넣었어요. (${res.stitches}코)`);
+      if (narrowRef.current) setPaletteOpen(false);
+    },
+    [h, showInserted, toast, viewCenter],
+  );
+
+  const saveVersion = useCallback((label?: string) => versions.save(work.id, { ...h.get(), view: viewRef.current }, label), [h, work.id]);
+
+  const buildImport = useCallback(
+    (res: ParseResult, o: ImportOptions) => {
+      const cur = h.get();
+      if (cur.layers.some((l) => l.items.length)) saveVersion("가져오기 전");
+      const r = insertChart(cur, res.rounds, { layout: o.layout, at: viewCenter(), name: "서술도안", ring: o.ring, roundGap: o.roundGap, spacing: o.spacing });
+      if (!r.layers.length) return toast("배치할 기호가 없어요.");
+      h.set(r.doc);
+      showInserted(r.layers);
+      toast(`${res.rounds.filter((x) => !x.foundation).length}단 · ${r.stitches}코를 배치했어요`);
+    },
+    [h, saveVersion, showInserted, toast, viewCenter],
+  );
+
+  const importLayers = useCallback(
+    (raw: CrochetLayer[], name: string) => {
+      const ok = (it: CrochetItem) =>
+        !!it && typeof it === "object" && (((it.type === "stitch" || it.type === "gather" || it.type === "text") && Number.isFinite((it as StitchItem).x) && Number.isFinite((it as StitchItem).y)) || (it.type === "stroke" && Array.isArray(it.points) && it.points.length >= 2));
+      const layers = raw.map((l, i) => ({ id: String(l.id ?? i), name: typeof l.name === "string" ? l.name.slice(0, 30) : `${i + 1}단`, visible: l.visible !== false, ...(typeof l.color === "string" ? { color: l.color } : {}), items: (l.items ?? []).filter(ok) }));
+      const count = layers.reduce((s, l) => s + l.items.length, 0);
+      if (!count) return toast("가져올 기호가 없어요.");
+      const cur = h.get();
+      if (cur.layers.some((l) => l.items.length)) saveVersion("가져오기 전");
+      const r = insertLayersAsFolder(cur, layers, name, viewCenter());
+      h.set(r.doc);
+      showInserted(r.doc.layers.slice(cur.layers.length));
+      toast(`‘${name}’에서 레이어 ${layers.length}개, 기호 ${count}개를 가져왔어요`);
+    },
+    [h, saveVersion, showInserted, toast, viewCenter],
+  );
+
+  const sendChat = useCallback(
+    (text: string) => {
+      const r = interpret(text, { doc: h.get(), selection: selRef.current, center: viewCenter() });
+      if (r.action === "undo") h.undo();
+      else if (r.action === "redo") h.redo();
+      else if (r.action === "fit") fitAll();
+      if (r.doc) {
+        const before = new Set(h.get().layers.map((l) => l.id));
+        h.set(r.doc);
+        const added = r.doc.layers.filter((l) => !before.has(l.id));
+        if (added.length) showInserted(added, false);
+      }
+      if (r.select) {
+        setSelection(r.select);
+        if (r.select.length) setModeState("select");
+      }
+      setChat((c) => {
+        const id = (c[c.length - 1]?.id ?? 0) + 1;
+        return [...c, { id, role: "user", text }, { id: id + 1, role: "assistant", text: r.reply }];
+      });
+    },
+    [fitAll, h, setSelection, showInserted, viewCenter],
   );
 
   // ---------- context menu ----------
@@ -1386,7 +1742,31 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     return null;
   }, [template, mode, hover, space, linear, radial]);
 
+  // 경로 편집: one stroke, or a path-like shape that becomes one
+  const pathCandidate = (() => {
+    const c = selItems.filter((it) => pathOutline(it) !== null);
+    if (c.length !== 1) return null;
+    const it = c[0];
+    return selItems.length === 1 || selItems.every((x) => x.groupId && x.groupId === it.groupId) ? it : null;
+  })();
+  const pathItem = pathEdit ? index.get(pathEdit)?.item : undefined;
+  const pathStroke = pathItem?.type === "stroke" ? pathItem : null;
+  const startPathEdit = () => {
+    if (pathEdit) return setPathEdit(null);
+    const it = pathCandidate;
+    if (!it) return;
+    if (it.type !== "stroke") {
+      const o = pathOutline(it)!;
+      const stroke: StrokeItem = { id: it.id, type: "stroke", points: o.points, width: STROKE_WIDTH, dash: "solid", ...(o.closed ? { closed: true } : {}), ...(it.color ? { color: it.color } : {}), ...(it.groupId ? { groupId: it.groupId } : {}) };
+      h.set((d) => mapItems(d, new Set([it.id]), () => stroke));
+      toast("도형을 점으로 바꿨어요. 꼭짓점을 드래그해 형태를 수정하세요");
+    }
+    if (mode !== "select") setMode("select");
+    setPathEdit(it.id);
+  };
+
   const hint = (() => {
+    if (pathStroke) return "꼭짓점을 드래그해 형태를 수정하세요 · 선을 눌러 점 추가 · 점을 두 번 눌러 삭제";
     if (assignSlot !== null) return "왼쪽에서 기호를 선택하세요";
     if (space || mode === "pan") return null;
     if ((mode === "insert" || mode === "linear" || mode === "radial") && !template) return "왼쪽에서 기호·도형·컴포넌트를 선택하세요";
@@ -1406,12 +1786,12 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     if (mode !== "select" || !single || single.type !== "stitch") return null;
     const s = getSymbol(single.symbol);
     if (!s?.stretch || s.stretch === "u") return null;
-    const { w, h: hh } = itemGeom(single);
+    const { w, h: hh, oy = 0 } = itemGeom(single);
     const r = (single.rotation * Math.PI) / 180;
     if (s.stretch === "v") {
       const sV = single.flipV ? -1 : 1;
       const dir = { x: Math.sin(r) * sV, y: -Math.cos(r) * sV };
-      const p = toScreen({ x: single.x + (dir.x * hh) / 2, y: single.y + (dir.y * hh) / 2 });
+      const p = toScreen({ x: single.x + dir.x * (hh / 2 - oy), y: single.y + dir.y * (hh / 2 - oy) });
       return { x: p.x + dir.x * 12, y: p.y + dir.y * 12, label: "위·아래로 드래그 · 늘리기 / 줄이기" };
     }
     const sH = single.flipH ? -1 : 1;
@@ -1420,18 +1800,48 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
     return { x: p.x + dir.x * 12, y: p.y + dir.y * 12, label: "좌·우로 드래그 · 늘리기 / 줄이기" };
   })();
 
+  const setBackground = useCallback(
+    (c: string) =>
+      h.set((d) => {
+        const n = { ...d };
+        if (c.toLowerCase() === DEFAULT_BG) delete n.background;
+        else n.background = c.toLowerCase();
+        return n;
+      }),
+    [h],
+  );
+  const setBackgroundOpacity = useCallback(
+    (pct: number) =>
+      h.set((d) => {
+        const n = { ...d };
+        if (pct >= 100) delete n.backgroundOpacity;
+        else n.backgroundOpacity = pct;
+        return n;
+      }),
+    [h],
+  );
+  const openVersions = useCallback(() => setVersionsOpen(true), []);
+  const openHeights = useCallback(() => setHeightsOpen(true), []);
+  const currentItems = useMemo(() => (versionsOpen ? doc.layers.filter((l) => l.visible).flatMap((l) => l.items) : []), [versionsOpen, doc.layers]);
+  const restoreVersion = (v: Version) => {
+    const data = normalize(v.data as CrochetData);
+    saveVersion("복원 전");
+    h.set(docOf(data));
+    setSelection([]);
+    setPathEdit(null);
+    toast(`${versionTime(v.at)} 버전으로 복원했어요`);
+  };
+
   const showRight = !narrow || rightOpen;
   const tourSteps = useMemo(() => makerTourSteps("crochet", narrow), [narrow]);
-  const navTab: NavTab = tab === "mine" ? "components" : "symbols";
+  const navTab: NavTab = tab === "mine" ? "components" : tab;
   const onNav = (t: NavTab) => {
-    if (t === "symbols" || t === "components") {
-      const want: PaletteTab = t === "components" ? "mine" : "symbols";
-      openPalette(want);
-      if (narrow) setRightOpen(false);
-      return;
-    }
-    soon(t === "library" ? "템플릿" : t === "aiConvert" ? "원문·파일로 만들기" : "AI 어시스턴트");
+    openPalette(t === "components" ? "mine" : t);
+    if (narrow) setRightOpen(false);
   };
+  const shell = { title, onRename: rename, status, onCollapse: () => setPaletteOpen(false) };
+
+
 
   // panel resize (drag the right edge, double-click resets)
   const startResize = (e: React.PointerEvent) => {
@@ -1471,7 +1881,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
   const clearSlot = (i: number) => h.set((d) => ({ ...d, quickSlots: d.quickSlots.map((v, j) => (j === i ? null : v)) }));
 
   const bgStyle: React.CSSProperties = {
-    backgroundColor: "rgb(255, 255, 255)",
+    backgroundColor: bgColor(doc.background, doc.backgroundOpacity),
     ...(doc.showGrid
       ? { backgroundImage: "radial-gradient(oklch(0.78 0.01 260 / 0.35) 1px, transparent 1px)", backgroundSize: `${gs}px ${gs}px`, backgroundPosition: `${vx % gs}px ${vy % gs}px` }
       : {}),
@@ -1491,12 +1901,19 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                 style={{ width: paletteW }}
               >
                 <div className="relative h-full shrink-0" style={{ width: paletteW }}>
+                  {tab === "library" ? (
+                    <TemplatePanel shell={shell} onInsert={insertTemplate} />
+                  ) : tab === "aiConvert" ? (
+                    <ImportPanel shell={shell} onBuild={buildImport} onImportLayers={importLayers} onError={toast} />
+                  ) : tab === "ai" ? (
+                    <AssistantPanel shell={shell} empty={!doc.layers.some((l) => l.items.length)} messages={chat} onSend={sendChat} onClear={() => setChat([])} selected={sel.length} />
+                  ) : (
                   <Palette
                     title={title}
                     onRename={rename}
                     status={status}
                     onCollapse={() => setPaletteOpen(false)}
-                    tab={tab}
+                    tab={tab === "mine" ? "mine" : "symbols"}
                     query={query}
                     onQuery={setQuery}
                     picked={picked}
@@ -1507,6 +1924,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                     onDeleteIcon={setDeleteIconId}
                     assigning={assignSlot !== null}
                   />
+                  )}
                 </div>
                 <div
                   role="separator"
@@ -1552,7 +1970,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                     {/* world */}
                     <g transform={worldT} fill="none" strokeWidth={STROKE_WIDTH} strokeLinecap="round" strokeLinejoin="round">
                       {doc.layers.map((l) => (
-                        <LayerView key={l.id} layer={l} dim={activeOnly && l.id !== doc.activeLayerId} />
+                        <LayerView key={l.id} layer={l} dim={activeOnly && l.id !== doc.activeLayerId} hk={hk} />
                       ))}
 
                       {/* per-item selection outlines */}
@@ -1560,8 +1978,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                         <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25} vectorEffect="non-scaling-stroke">
                           {selItems.map((it) => {
                             if (it.type === "stitch" || it.type === "gather") {
-                              const { w, h: hh } = itemGeom(it);
-                              return <rect key={it.id} x={-w / 2 - 2} y={-hh / 2 - 2} width={w + 4} height={hh + 4} rx={3} transform={stitchTransform(it)} vectorEffect="non-scaling-stroke" />;
+                              const { w, h: hh, oy = 0 } = itemGeom(it);
+                              return <rect key={it.id} x={-w / 2 - 2} y={oy - hh / 2 - 2} width={w + 4} height={hh + 4} rx={3} transform={stitchTransform(it)} vectorEffect="non-scaling-stroke" />;
                             }
                             const b = itemBounds(it);
                             return <rect key={it.id} x={b.x0 - 2} y={b.y0 - 2} width={b.x1 - b.x0 + 4} height={b.y1 - b.y0 + 4} rx={3} vectorEffect="non-scaling-stroke" />;
@@ -1610,7 +2028,35 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                         pointerEvents="none"
                       />
                     )}
-                    {mode === "select" && selScreen && !marquee && (
+                    {pathStroke && (
+                      <g data-path-editor="">
+                        {(pathStroke.closed ? [...pathStroke.points, pathStroke.points[0]] : pathStroke.points).map((p, i, all) => {
+                          if (i === all.length - 1) return null;
+                          const a = toScreen({ x: p[0], y: p[1] }), b = toScreen({ x: all[i + 1][0], y: all[i + 1][1] });
+                          return (
+                            <line key={`s${i}`} data-seg={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={12} style={{ cursor: "copy" }}>
+                              <title>눌러서 점 추가</title>
+                            </line>
+                          );
+                        })}
+                        <path
+                          d={pathStroke.points.map(([x, y], i) => `${i ? "L" : "M"}${x * zoom + vx} ${y * zoom + vy}`).join("") + (pathStroke.closed ? "Z" : "")}
+                          stroke="#5f9c1a"
+                          strokeDasharray="4 3"
+                          fill="none"
+                          pointerEvents="none"
+                        />
+                        {pathStroke.points.map(([x, y], i) => {
+                          const q = toScreen({ x, y });
+                          return (
+                            <circle key={`v${i}`} data-vertex={i} cx={q.x} cy={q.y} r={5.5} fill={pathVertex === i ? "#5f9c1a" : "#fff"} stroke="#5f9c1a" strokeWidth={1.5} style={{ cursor: "move" }}>
+                              <title>드래그해 옮기기 · 두 번 눌러 삭제</title>
+                            </circle>
+                          );
+                        })}
+                      </g>
+                    )}
+                    {mode === "select" && selScreen && !marquee && !pathStroke && (
                       <g>
                         {sel.length > 1 && (
                           <rect
@@ -1647,11 +2093,11 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                   <div className="pointer-events-none absolute top-3 left-3" data-tour="written-toggle">
                     <button
                       type="button"
-                      aria-pressed={false}
-                      aria-label="서술도안 보기"
-                      title="서술도안 보기"
-                      onClick={() => soon("서술도안")}
-                      className={cx(sab("neutralOutline"), BTN, "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 hover:bg-bg-layer-default-pressed/80")}
+                      aria-pressed={writtenOpen}
+                      aria-label={writtenOpen ? "서술도안 숨기기" : "서술도안 보기"}
+                      title={writtenOpen ? "서술도안 숨기기" : "서술도안 보기"}
+                      onClick={() => setWrittenOpen((v) => !v)}
+                      className={cx(sab("neutralOutline"), BTN, "pointer-events-auto h-8 gap-1.5 !rounded-r2 border-stroke-neutral-muted bg-bg-layer-default px-2.5 text-fg-neutral shadow-s2 hover:bg-bg-layer-default-pressed/80", writtenOpen && "!border-stroke-neutral-contrast !bg-bg-layer-default-pressed")}
                       style={el(79, 32)}
                     >
                       <ScrollText className="size-3.5" />
@@ -1659,6 +2105,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                       <span className="text-[11px] leading-none font-medium">서술도안</span>
                     </button>
                   </div>
+                  {writtenOpen && <WrittenPanel layers={doc.layers} folders={folders} onClose={() => setWrittenOpen(false)} />}
                 </div>
 
                 {/* top centre: selection count / tool hints */}
@@ -1747,6 +2194,19 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                   </div>
                 )}
 
+                {pathStroke && (
+                  <div className="absolute bottom-[170px] left-1/2 z-[60] flex -translate-x-1/2 items-center gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x1_5 pr-x1_5 pl-x3 shadow-s2" role="group" aria-label="경로 편집">
+                    <span className="text-[13px] font-semibold whitespace-nowrap">경로 편집</span>
+                    <span className="text-[12px] whitespace-nowrap text-fg-neutral-muted tabular-nums">점 {pathStroke.points.length}개</span>
+                    <Button size="sm" variant="ghost" disabled={pathVertex === null || pathStroke.points.length <= 2} onClick={() => pathVertex !== null && deleteVertex(pathVertex)}>
+                      점 삭제
+                    </Button>
+                    <Button size="sm" onClick={() => setPathEdit(null)}>
+                      완료
+                    </Button>
+                  </div>
+                )}
+
                 {mode === "number" && (
                   <div className="absolute bottom-[170px] left-1/2 z-[60] flex -translate-x-1/2 items-center gap-x2 rounded-r3 border border-stroke-neutral-muted bg-bg-layer-default py-x1_5 pr-x1_5 pl-x3 shadow-s2" role="group" aria-label="단 숫자">
                     <span className="text-[13px] font-semibold whitespace-nowrap">다음 숫자</span>
@@ -1782,8 +2242,9 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                       onMode={setMode}
                       onUndo={h.undo}
                       onRedo={h.redo}
-                      canEditPath={selItems.length === 1 && selItems[0].type === "stroke"}
-                      onEditPath={() => soon("경로 편집")}
+                      canEditPath={!!pathCandidate || !!pathStroke}
+                      pathActive={!!pathStroke}
+                      onEditPath={startPathEdit}
                       canGroup={sel.length >= 2}
                       canUngroup={selItems.some((it) => it.groupId)}
                       onGroup={groupSel}
@@ -1802,6 +2263,7 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                 <div className={cx("h-full shrink-0", narrow && "absolute inset-y-0 right-0 z-[90] shadow-s3")}>
                   <RightPanel
                     layers={doc.layers}
+                    folders={folders}
                     activeLayerId={doc.activeLayerId}
                     activeOnly={activeOnly}
                     onActiveOnly={setActiveOnly}
@@ -1811,7 +2273,13 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                     savedAt={savedAt}
                     zoom={zoom}
                     zoomItems={zoomItems}
-                    onSoon={soon}
+                    background={doc.background ?? DEFAULT_BG}
+                    backgroundOpacity={doc.backgroundOpacity ?? 100}
+                    onBackground={setBackground}
+                    onBackgroundOpacity={setBackgroundOpacity}
+                    onVersions={openVersions}
+                    onHeights={openHeights}
+                    heightsOn={!!doc.heights}
                   />
                 </div>
               )}
@@ -1823,6 +2291,34 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
       <CtxMenu at={ctx} items={ctxItems} onClose={closeCtx} />
 
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} onExport={onExport} />
+      <VersionDialog
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        workId={work.id}
+        currentItems={currentItems}
+        savedAt={savedAt}
+        onSave={(label) => toast(saveVersion(label) ? `버전을 저장했어요${label.trim() ? ` · ${label.trim()}` : ""}` : "저장 공간이 부족해 버전을 저장하지 못했어요")}
+        onRestore={restoreVersion}
+        onRename={(id, label) => versions.rename(work.id, id, label)}
+        onRemove={(id) => versions.remove(work.id, id)}
+      />
+      <HeightsDialog
+        open={heightsOpen}
+        onClose={() => setHeightsOpen(false)}
+        heights={doc.heights}
+        onBegin={h.checkpoint}
+        onChange={(hh, merge) =>
+          h.set(
+            (d) => {
+              const n = { ...d };
+              if (hh) n.heights = hh;
+              else delete n.heights;
+              return n;
+            },
+            { merge },
+          )
+        }
+      />
       <ShortcutDialog open={helpOpen} onClose={() => setHelpOpen(false)} groups={SHORTCUTS} />
       <SpotlightTour
         open={tour}

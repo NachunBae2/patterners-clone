@@ -5,7 +5,7 @@ import { Button, Dialog, Segmented, useToast } from "@/components/app/ui";
 
 export type Shortcut = { keys: string; label: string };
 export type ShortcutGroup = { title: string; items: Shortcut[] };
-export type ExportFormat = "png" | "jpg" | "svg";
+export type ExportFormat = "png" | "jpg" | "svg" | "json";
 
 /** Export dialog (format picker). `onExport` returns false when there is nothing to export. */
 export function ExportDialog({ open, onClose, onExport }: { open: boolean; onClose: () => void; onExport: (f: ExportFormat) => Promise<boolean> | boolean }) {
@@ -49,10 +49,15 @@ export function ExportDialog({ open, onClose, onExport }: { open: boolean; onClo
           { value: "png", label: "PNG" },
           { value: "jpg", label: "JPG" },
           { value: "svg", label: "SVG" },
+          { value: "json", label: "JSON" },
         ]}
       />
       <p className="mt-x3 text-[0.8125rem] text-fg-neutral-muted">
-        {format === "svg" ? "확대해도 선명한 벡터 파일이에요." : "고화질(2배)로 저장해요. 인쇄용이면 PNG를 추천해요."}
+        {format === "json"
+          ? "레이어·폴더까지 담은 도안 파일이에요. 원문·파일로 만들기에서 다시 불러올 수 있어요."
+          : format === "svg"
+            ? "확대해도 선명한 벡터 파일이에요."
+            : "고화질(2배)로 저장해요. 인쇄용이면 PNG를 추천해요."}
       </p>
     </Dialog>
   );

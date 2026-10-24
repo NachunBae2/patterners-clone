@@ -133,6 +133,8 @@ type ToolbarProps = {
   onUndo: () => void;
   onRedo: () => void;
   canEditPath: boolean;
+  /** path editing is on (the button shows pressed and turns it off) */
+  pathActive?: boolean;
   onEditPath: () => void;
   canGroup: boolean;
   canUngroup: boolean;
@@ -205,7 +207,7 @@ export const Toolbar = memo(function Toolbar(p: ToolbarProps) {
             <ToolButton label="펜 도구 (P)" active={on("pen")} onClick={() => p.onMode("pen")}>
               <PenTool />
             </ToolButton>
-            <ToolButton label={p.canEditPath ? "경로 편집" : "편집할 기호를 하나 선택한 뒤 경로 편집을 눌러 주세요."} disabled={!p.canEditPath} onClick={p.onEditPath}>
+            <ToolButton label={p.pathActive ? "경로 편집 끝내기" : p.canEditPath ? "경로 편집" : "편집할 기호를 하나 선택한 뒤 경로 편집을 눌러 주세요."} active={!!p.pathActive} disabled={!p.canEditPath} onClick={p.onEditPath}>
               <Pencil />
             </ToolButton>
           </div>
