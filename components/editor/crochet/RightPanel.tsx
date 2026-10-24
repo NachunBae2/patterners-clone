@@ -75,8 +75,10 @@ export const RightPanel = memo(function RightPanel(p: Props) {
   const [opacityDraft, setOpacityDraft] = useState<string | null>(null);
   const commitOpacity = () => {
     if (opacityDraft === null) return;
-    const v = Number(opacityDraft.replace(/[^\d.]/g, ""));
-    if (Number.isFinite(v) && opacityDraft.trim() !== "") p.onBackgroundOpacity(Math.max(0, Math.min(100, Math.round(v))));
+    // letters or an empty field keep the current value
+    const cleaned = opacityDraft.replace(/[^\d.]/g, "");
+    const v = Number(cleaned);
+    if (cleaned && Number.isFinite(v)) p.onBackgroundOpacity(Math.max(0, Math.min(100, Math.round(v))));
     setOpacityDraft(null);
   };
   return (

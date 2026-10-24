@@ -1977,6 +1977,8 @@ export default function CrochetEditor({ work, data }: { work: Work; data: Croche
                       {sel.length > 0 && sel.length <= 400 && (
                         <g pointerEvents="none" stroke="#5f9c1a" strokeWidth={1.25} vectorEffect="non-scaling-stroke">
                           {selItems.map((it) => {
+                            // the stroke being path-edited shows its points instead of a box
+                            if (it.id === pathStroke?.id) return null;
                             if (it.type === "stitch" || it.type === "gather") {
                               const { w, h: hh, oy = 0 } = itemGeom(it);
                               return <rect key={it.id} x={-w / 2 - 2} y={oy - hh / 2 - 2} width={w + 4} height={hh + 4} rx={3} transform={stitchTransform(it)} vectorEffect="non-scaling-stroke" />;
