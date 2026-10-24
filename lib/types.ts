@@ -66,7 +66,22 @@ export type CrochetLayer = {
   locked?: boolean;
   color?: string; // default colour for new stitches on this layer
   items: CrochetItem[];
+  /** folder (CrochetFolder.id) this layer is listed under */
+  folderId?: string;
+  /** how a generated round / row was laid out, so the next one can follow it */
+  guide?: RoundGuide;
 };
+
+/** Layer folder (폴더) in the layer list. Visibility is per layer; the folder toggles all of its layers. */
+export type CrochetFolder = { id: string; name: string; collapsed?: boolean };
+
+/** Layout of a generated round (offset of a core polygon around a centre) or row (horizontal line). */
+export type RoundGuide =
+  | { kind: "round"; layout: "radial" | "oval" | "square" | "hexagon"; cx: number; cy: number; core: [number, number][]; d: number; top: number; alpha?: number }
+  | { kind: "row"; cx: number; foot: number; top: number; dir: 1 | -1 };
+
+/** 기호 높이: chain-unit height per tall-stitch height class (2 = 긴뜨기 … 7 = 다섯길) and a global multiplier. */
+export type StitchHeights = { scale?: number; units?: Record<string, number> };
 
 export type CrochetData = {
   layers: CrochetLayer[];
@@ -74,6 +89,13 @@ export type CrochetData = {
   quickSlots: (string | null)[]; // 5 symbol ids
   showGrid: boolean;
   view: View;
+  /** layer folders (older charts have none) */
+  folders?: CrochetFolder[];
+  /** canvas background colour (default white) and opacity 0–100 */
+  background?: string;
+  backgroundOpacity?: number;
+  /** tall-stitch heights (default: each stitch's own chain height) */
+  heights?: StitchHeights;
 };
 
 // ---------- Knitting (grid boards with symbols + colour) ----------

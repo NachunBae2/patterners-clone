@@ -197,8 +197,8 @@ const gatherCache = new Map<string, GatherGeom>();
  * Returned primitives are re-centred so the bounding box is centred on (0, 0) like any symbol.
  * `icon` draws the legs at palette scale (24-unit chain, tall legs clamped).
  */
-export function gatherGeom(kind: "increase" | "decrease", legId: string, count: number, spread: number, icon = false): GatherGeom {
-  const key = `${kind}|${legId}|${count}|${f(spread)}|${icon ? 1 : 0}`;
+export function gatherGeom(kind: "increase" | "decrease", legId: string, count: number, spread: number, icon = false, legScale = 1): GatherGeom {
+  const key = `${kind}|${legId}|${count}|${f(spread)}|${icon ? 1 : 0}|${legScale}`;
   const hit = gatherCache.get(key);
   if (hit) return hit;
   const leg = SYMBOL_MAP.get(legId) ?? SYMBOL_MAP.get("sc")!;
@@ -209,7 +209,7 @@ export function gatherGeom(kind: "increase" | "decrease", legId: string, count: 
   let pts: [number, number][];
   const shareHead = !inc && !!leg.tall;
   if (leg.tall) {
-    h = icon ? ICON_U : (leg.h / U) * u;
+    h = icon ? ICON_U : (leg.h / U) * u * legScale;
     legPrims = leg.draw({ w: u, h, noHead: shareHead, u });
     const hw = u * 0.27;
     pts = [[-hw, -h / 2], [hw, -h / 2], [0, h / 2]];

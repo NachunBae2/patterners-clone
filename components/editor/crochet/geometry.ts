@@ -1,7 +1,7 @@
 // Pure geometry + serialisation helpers for the crochet whiteboard.
 import { uid } from "@/lib/id";
-import type { CrochetItem, CrochetLayer, GatherItem, StitchItem, StrokeItem, TextItem } from "@/lib/types";
-import { INK, STROKE_WIDTH, gatherGeom, getSymbol, primsToSvg, symbolSize, type Prim } from "@/lib/symbols/crochet";
+import type { CrochetItem, CrochetLayer, GatherItem, StitchHeights, StitchItem, StrokeItem, TextItem } from "@/lib/types";
+import { INK, STROKE_WIDTH, gatherGeom, getSymbol, primsToSvg, symbolSize, type CrochetSymbol, type Prim } from "@/lib/symbols/crochet";
 
 export type Pt = { x: number; y: number };
 export type Box = { x0: number; y0: number; x1: number; y1: number };
@@ -11,30 +11,107 @@ export const snap = (v: number, on = true) => (on ? Math.round(v / SNAP) * SNAP 
 const RAD = Math.PI / 180;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+// ---------- 기호 높이 (doc-level tall-stitch heights) ----------
+
+/** Height classes shown in the 기호 높이 dialog: chain units → label. */
+export const HEIGHT_CLASSES: { units: number; label: string }[] = [
+  { units: 2, label: "긴뜨기" },
+  { units: 3, label: "한길긴뜨기" },
+  { units: 4, label: "두길긴뜨기" },
+  { units: 5, label: "세길긴뜨기" },
+  { units: 6, label: "네길긴뜨기" },
+  { units: 7, label: "다섯길긴뜨기" },
+];
+
+let heights: StitchHeights | undefined;
+let heightsKey = "";
+
+/**
+ * Sets the heights every geometry call uses (one editor is mounted at a time).
+ * Returns a key that changes whenever the heights do (used to re-render memoised items).
+ */
+export function setStitchHeights(h: StitchHeights | undefined): string {
+  const key = h ? JSON.stringify(h) : "";
+  if (key !== heightsKey) {
+    heights = h;
+    heightsKey = key;
+  }
+  return heightsKey;
+}
+
+/** True for symbols drawn N chains tall that follow the 기호 높이 setting. */
+export const followsHeights = (s: CrochetSymbol) => s.units >= 2 && !s.gather && (!!s.tall || s.stretch === "v");
+
+/** Vertical factor the doc's 기호 높이 applies to a symbol (1 = its own height). */
+export function heightFactor(id: string): number {
+  if (!heights) return 1;
+  const s = getSymbol(id);
+  if (!s || !followsHeights(s)) return 1;
+  const u = heights.units?.[String(s.units)];
+  const k = (u && u > 0 ? u / s.units : 1) * (heights.scale && heights.scale > 0 ? heights.scale : 1);
+  return Math.round(k * 1000) / 1000;
+}
+
 // ---------- symbol geometry ----------
 
-type Geom = { w: number; h: number; prims: Prim[] };
+/**
+ * `oy`: local y of the box centre when 기호 높이 stretched the symbol. Stretching keeps the foot where the
+ * unstretched foot was, so the drawing moves up by half the extra height (0 / absent otherwise).
+ */
+export type Geom = { w: number; h: number; prims: Prim[]; oy?: number };
+/** Local y of the foot (bottom centre) of a geometry. */
+export const geomFoot = (g: Geom) => g.h / 2 + (g.oy ?? 0);
+const lift = (prims: Prim[], oy: number): Prim[] => [{ t: "g", transform: `translate(0 ${r2(oy)})`, children: prims }];
 const stitchCache = new Map<string, Geom>();
 const MISSING: Prim[] = [{ t: "path", d: "M-6 -6H6V6H-6ZM-6 -6L6 6" }];
 
 export function stitchGeom(it: StitchItem): Geom {
-  const key = `${it.symbol}|${it.scale ?? 1}`;
+  const hk = heightFactor(it.symbol);
+  const key = `${it.symbol}|${it.scale ?? 1}|${hk}`;
   const hit = stitchCache.get(key);
   if (hit) return hit;
   const s = getSymbol(it.symbol);
   let g: Geom;
   if (!s) g = { w: 14, h: 14, prims: MISSING };
   else {
-    const { w, h } = symbolSize(s, it.scale ?? 1);
-    g = { w, h, prims: s.draw({ w, h }) };
+    const { w, h } = symbolSize(s, (it.scale ?? 1) * hk);
+    if (hk === 1) g = { w, h, prims: s.draw({ w, h }) };
+    else {
+      const oy = -(h - symbolSize(s, it.scale ?? 1).h) / 2;
+      g = { w, h, prims: lift(s.draw({ w, h }), oy), oy };
+    }
   }
   stitchCache.set(key, g);
   return g;
 }
 
+const gatherCache = new Map<string, Geom>();
 export function gatherItemGeom(it: GatherItem): Geom {
-  return gatherGeom(it.kind, it.symbol, it.count, it.spread);
+  const k = heightFactor(it.symbol);
+  if (k === 1) return gatherGeom(it.kind, it.symbol, it.count, it.spread);
+  const key = `${it.kind}|${it.symbol}|${it.count}|${it.spread}|${k}`;
+  const hit = gatherCache.get(key);
+  if (hit) return hit;
+  const g = gatherGeom(it.kind, it.symbol, it.count, it.spread, false, k);
+  const base = gatherGeom(it.kind, it.symbol, it.count, it.spread);
+  const oy = -(g.h - base.h) / 2;
+  const out: Geom = { w: g.w, h: g.h, prims: lift(g.prims, oy), oy };
+  gatherCache.set(key, out);
+  return out;
 }
+
+/** World point of an item's local (0, ly) (before flips). */
+export function itemLocal(it: StitchItem | GatherItem, ly: number): Pt {
+  const y = it.type === "stitch" && it.flipV ? -ly : ly;
+  const r = (it.rotation * Math.PI) / 180;
+  return { x: it.x - Math.sin(r) * y, y: it.y + Math.cos(r) * y };
+}
+/** Where a stitch is worked into (bottom centre), and its head (top centre), in world units. */
+export const itemFoot = (it: StitchItem | GatherItem) => itemLocal(it, geomFoot(itemGeom(it)));
+export const itemHead = (it: StitchItem | GatherItem) => {
+  const g = itemGeom(it);
+  return itemLocal(it, (g.oy ?? 0) - g.h / 2);
+};
 
 export function itemGeom(it: StitchItem | GatherItem): Geom {
   return it.type === "stitch" ? stitchGeom(it) : gatherItemGeom(it);
@@ -55,8 +132,9 @@ export function itemBounds(it: CrochetItem): Box {
   switch (it.type) {
     case "stitch":
     case "gather": {
-      const { w, h } = itemGeom(it);
-      return rotBox(it.x, it.y, w, h, it.rotation);
+      const { w, h, oy } = itemGeom(it);
+      const c = oy ? itemLocal(it, oy) : it;
+      return rotBox(c.x, c.y, w, h, it.rotation);
     }
     case "text": {
       const w = textWidth(it);
@@ -241,7 +319,7 @@ export function itemToSvg(it: CrochetItem, fallback = INK): string {
  * Standalone SVG of the visible layers. Tight bounds + margin.
  * With `fit`, the output is scaled to fit that pixel box (thumbnails).
  */
-export function buildSvg(layers: CrochetLayer[], opts: { margin?: number; fit?: { w: number; h: number }; background?: string } = {}): string | null {
+export function buildSvg(layers: CrochetLayer[], opts: { margin?: number; fit?: { w: number; h: number }; background?: string; backgroundOpacity?: number } = {}): string | null {
   const visible = layers.filter((l) => l.visible && l.items.length);
   const all = visible.flatMap((l) => l.items);
   const b = unionBounds(all);
@@ -257,7 +335,7 @@ export function buildSvg(layers: CrochetLayer[], opts: { margin?: number; fit?: 
   const body = visible
     .map((l) => `<g>${l.items.map((it) => itemToSvg(it, l.color ?? INK)).join("")}</g>`)
     .join("");
-  const bg = opts.background ? `<rect x="${r2(vx)}" y="${r2(vy)}" width="${r2(vw)}" height="${r2(vh)}" fill="${opts.background}"/>` : "";
+  const bg = opts.background ? `<rect x="${r2(vx)}" y="${r2(vy)}" width="${r2(vw)}" height="${r2(vh)}" fill="${escAttr(opts.background)}"${opts.backgroundOpacity !== undefined && opts.backgroundOpacity < 1 ? ` fill-opacity="${r2(opts.backgroundOpacity)}"` : ""}/>` : "";
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${r2(W)}" height="${r2(H)}" viewBox="${r2(vx)} ${r2(vy)} ${r2(vw)} ${r2(vh)}">` +
     bg +
