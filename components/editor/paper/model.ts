@@ -176,7 +176,7 @@ export const PAPER_CSS = `
 .pp-doc table.pp-table{width:100%;border-collapse:collapse;margin:6px 0 14px;font-size:14px}
 .pp-doc table.pp-table td,.pp-doc table.pp-table th{padding:6px 10px;text-align:left;vertical-align:top}
 .pp-doc figure{margin:8px auto 16px;text-align:center;break-inside:avoid}
-.pp-doc figure img{max-width:100%;height:auto;display:block;margin:0 auto;border-radius:6px}
+.pp-doc figure img{width:100%;max-width:100%;height:auto;display:block;margin:0 auto;border-radius:6px}
 .pp-doc figure.pp-embed img{width:100%;background:#f6f6f7;border:1px solid #e3e5e8;padding:12px;box-sizing:border-box}
 .pp-doc figcaption{font-size:13px;color:#6b6f76;margin-top:6px}
 .pp-doc .pp-noimg{padding:40px;background:#f6f6f7;color:#9a9ea5;border-radius:6px}

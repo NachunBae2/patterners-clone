@@ -91,7 +91,9 @@ export function ShapePanel({ d, set, onCraft, onNeckline }: { d: ApparelData; se
         <Hint>{d.craft === "crochet" ? "코바늘은 단 끝에서 뜨지 않고 남기거나 모아떠서 줄여요. 게이지는 바탕뜨기(짧은뜨기 등)로 재요." : "대바늘은 겉면 단에서 양쪽 가장자리를 줄이고 늘려요."}</Hint>
       </PanelSection>
       <PanelSection title="뜨는 방향">
-        <Seg label="뜨는 방향" value="bottomUp" onChange={() => {}} options={[{ value: "bottomUp", label: "바텀업" }]} />
+        <Row label="뜨는 방향">
+          <span className="t2-medium text-fg-neutral">바텀업</span>
+        </Row>
         <Hint>밑단에서 코를 잡아 위로 떠요. 앞판·뒤판·소매를 따로 떠서 이어요.</Hint>
       </PanelSection>
     </div>
