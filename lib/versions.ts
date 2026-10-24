@@ -22,6 +22,7 @@ const MAX_NAMED = 40;
 
 const listeners = new Set<() => void>();
 const cache = new Map<string, Version[]>();
+const baseline = new Map<string, { at: number; json: string }>();
 
 function read(workId: string): Version[] {
   const hit = cache.get(workId);
@@ -63,10 +64,20 @@ export const versions = {
     const v: Version = { id: uid(), at: Date.now(), label: label?.trim() || undefined, auto: false, data: structuredClone(data) };
     return write(workId, trim([v, ...read(workId)]));
   },
-  /** Called by autosave: records a version when the last one is older than AUTO_GAP and the data changed. */
+  /**
+   * Called by autosave: records a version when the last one is older than AUTO_GAP and the data changed.
+   * With no versions yet, the first call only sets a baseline (opening a work autosaves once), so the
+   * first auto version comes after AUTO_GAP of real edits.
+   */
   autoSnapshot(workId: string, data: WorkData) {
     const list = read(workId);
     const last = list[0];
+    if (!last) {
+      const base = baseline.get(workId);
+      const json = JSON.stringify(data);
+      if (!base) return void baseline.set(workId, { at: Date.now(), json });
+      if (Date.now() - base.at < AUTO_GAP || base.json === json) return;
+    }
     if (last && Date.now() - last.at < AUTO_GAP) return;
     if (last && JSON.stringify(last.data) === JSON.stringify(data)) return;
     write(workId, trim([{ id: uid(), at: Date.now(), auto: true, data: structuredClone(data) }, ...list]));

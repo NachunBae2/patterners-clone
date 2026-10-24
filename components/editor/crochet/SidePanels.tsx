@@ -187,6 +187,8 @@ export function ImportPanel({
   onError: (msg: string) => void;
 }) {
   const [text, setText] = useState("");
+  // the text last turned into a chart: pressing again would insert a second copy
+  const [builtText, setBuiltText] = useState<string | null>(null);
   const [layoutPick, setLayoutPick] = useState<Layout | "auto">("auto");
   const [ringPick, setRingPick] = useState<boolean | null>(null);
   const [roundGap, setRoundGap] = useState(4);
@@ -333,8 +335,16 @@ export function ImportPanel({
               </span>
             </div>
           )}
-          <Button variant="primary" disabled={!rounds.length} onClick={() => res && onBuild(res, { layout, ring: ring && layout !== "linear", roundGap, spacing })}>
-            도안 만들기
+          <Button
+            variant="primary"
+            disabled={!rounds.length || builtText === text}
+            onClick={() => {
+              if (!res) return;
+              onBuild(res, { layout, ring: ring && layout !== "linear", roundGap, spacing });
+              setBuiltText(text);
+            }}
+          >
+            {builtText === text && rounds.length ? "도안에 넣었어요" : "도안 만들기"}
           </Button>
         </div>
       </div>
