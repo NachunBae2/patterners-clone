@@ -3,6 +3,7 @@
 // Works live in localStorage. One key per work + an index for listing.
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { uid } from "./id";
+import { versions } from "./versions";
 import type { Craft, CrochetData, GridData, KnitData, Work, WorkData } from "./types";
 
 const INDEX_KEY = "pt:works";
@@ -39,7 +40,10 @@ function readIndex(): IndexEntry[] {
   // purge works that have been in the trash for more than 30 days
   const keep = all.filter((w) => !w.deletedAt || now - w.deletedAt < TRASH_DAYS * 864e5);
   if (keep.length !== all.length) {
-    all.filter((w) => !keep.includes(w)).forEach((w) => localStorage.removeItem(workKey(w.id)));
+    all.filter((w) => !keep.includes(w)).forEach((w) => {
+      localStorage.removeItem(workKey(w.id));
+      versions.clear(w.id);
+    });
     write(INDEX_KEY, keep);
   }
   indexCache = keep;
@@ -134,6 +138,7 @@ export const works = {
   restore: (id: string) => works.update(id, { deletedAt: null }),
   destroy(id: string) {
     localStorage.removeItem(workKey(id));
+    versions.clear(id);
     writeIndex(readIndex().filter((w) => w.id !== id));
   },
 };

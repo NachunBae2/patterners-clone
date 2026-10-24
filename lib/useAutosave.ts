@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { works } from "./store";
+import { versions } from "./versions";
 import type { WorkData } from "./types";
 
 export type SaveStatus = "saved" | "saving" | "error";
@@ -30,6 +31,7 @@ export function useAutosave(id: string, data: WorkData, thumb?: () => string | u
         thumbnail = undefined;
       }
       const ok = works.save(id, data, thumbnail ? { thumbnail } : {});
+      if (ok) versions.autoSnapshot(id, data);
       setStatus(ok ? "saved" : "error");
     }, delay);
     return () => clearTimeout(t);
