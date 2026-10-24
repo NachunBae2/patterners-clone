@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Dialog, cx, isMod, useHotkeys, useToast } from "@/components/app/ui";
+import { AtelierDialog } from "@/components/app/AtelierDialog";
+import { ShareDialog } from "@/components/app/ShareDialog";
 import { safeName, exportSvg, svgThumbnail } from "@/lib/export";
 import { works } from "@/lib/store";
 import { useAutosave } from "@/lib/useAutosave";
@@ -495,7 +497,7 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
   const stNo = hover ? stNoOf(hover.c, page.cols, numbering) : null;
   const leftOpen = tab !== null;
   const onTab = (t: RailTab) => setTab((v) => (v === t ? null : t));
-  const soon = () => toast("준비 중이에요");
+  const [appDialog, setAppDialog] = useState<"share" | "atelier" | null>(null);
 
   const StatusIcon = status === "error" ? LCloudAlert : status === "saving" ? LCloud : LCloudCheck;
   const statusText = status === "error" ? "저장하지 못했어요" : status === "saving" ? "저장 중" : "저장됨";
@@ -503,8 +505,10 @@ export default function GridEditor({ work, data }: { work: Work; data: GridData 
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-bg-layer-fill text-fg-neutral" data-editor-shell>
       <StartDialog open={startOpen} onPick={pickStart} onClose={() => setStartOpen(false)} />
+      <ShareDialog open={appDialog === "share"} onClose={() => setAppDialog(null)} work={{ title, craft: "grid", data: doc }} />
+      <AtelierDialog open={appDialog === "atelier"} onClose={() => setAppDialog(null)} work={{ id: work.id, title, craft: "grid", data: doc }} />
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <Rail tab={tab} onTab={onTab} onPreview={() => toast(doc.mode === "knit" ? "준비 중이에요" : "뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요")} onAtelier={soon} onShare={soon} onExport={() => setExportOpen(true)} />
+        <Rail tab={tab} onTab={onTab} onPreview={() => toast(doc.mode === "knit" ? "준비 중이에요" : "뜬 모습 미리보기는 대바늘 배색에서 볼 수 있어요")} onAtelier={() => setAppDialog("atelier")} onShare={() => setAppDialog("share")} onExport={() => setExportOpen(true)} />
 
         {leftOpen && (
           <div className="absolute inset-y-0 left-14 z-[60] h-full shadow-s3 lg:relative lg:left-0 lg:z-auto lg:shadow-none">

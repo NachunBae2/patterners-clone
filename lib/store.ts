@@ -49,6 +49,16 @@ function readIndex(): IndexEntry[] {
   indexCache = keep;
   return keep;
 }
+// Another tab changed the list (e.g. a share link cloned in a new tab): drop the cache so
+// this tab's next save doesn't write back a stale index.
+if (typeof window !== "undefined")
+  window.addEventListener("storage", (e) => {
+    if (e.key === INDEX_KEY || e.key === null) {
+      indexCache = null;
+      emit();
+    }
+  });
+
 function writeIndex(next: IndexEntry[]) {
   indexCache = next;
   write(INDEX_KEY, next);
@@ -133,6 +143,12 @@ export const works = {
     const w = works.get(id);
     if (!w) return null;
     return works.create(w.craft, `${w.title} (사본)`, structuredClone(w.data));
+  },
+  /** Writes a work as-is, keeping its id (backup restore). Replaces a work with the same id. */
+  put(w: Work): boolean {
+    const ok = write(workKey(w.id), w.data);
+    if (ok) writeIndex([meta(w), ...readIndex().filter((x) => x.id !== w.id)]);
+    return ok;
   },
   trash: (id: string) => works.update(id, { deletedAt: Date.now(), pinned: false }),
   restore: (id: string) => works.update(id, { deletedAt: null }),
