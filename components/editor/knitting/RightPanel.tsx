@@ -1,10 +1,10 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
-import { Menu, cx } from "@/components/app/ui";
+import { Button, ContextMenu, Dialog, Menu, cx, type MenuItem } from "@/components/app/ui";
 import { AB_TAIL, ab, seedSize } from "./ab";
-import { ChevronDown, Eye, EyeOff, FolderPlus, Pencil, Plus, RotateCcwClock, Trash2 } from "./icons";
-import { DEFAULT_ROW_SIDES, numberingOf, type KDoc, type KGrid, type Numbering, type RowSides } from "./model";
+import { ChevronDown, ChevronRight, Ellipsis, Eye, EyeOff, Folder, FolderInput, FolderPlus, Pencil, Plus, RotateCcwClock, Trash2 } from "./icons";
+import { DEFAULT_ROW_SIDES, numberingOf, type KDoc, type KFolder, type KGrid, type Numbering, type RowSides } from "./model";
 
 /* layout-audit-ignore: tiny-text — this panel reproduces the reference editor, whose settings use 10–12px type */
 
@@ -22,6 +22,10 @@ type Props = {
   onDelete: (id: string) => void;
   onAddGrid: () => void;
   onAddFolder: () => void;
+  onFolder: (id: string, patch: Partial<KFolder>) => void;
+  onUngroup: (id: string) => void;
+  onDeleteFolder: (id: string) => void;
+  onMoveGrid: (gridId: string, folderId: string | null) => void;
   onNumbering: (n: Numbering) => void;
   onSides: (s: RowSides) => void;
   onGaugeOn: (on: boolean) => void;
@@ -351,6 +355,90 @@ export function RightPanel(p: Props) {
   const [bgOpen, setBgOpen] = useState(false);
   const active = p.doc.grids.find((g) => g.id === p.activeId) ?? null;
   const bg = p.doc.bg ?? { color: "#ffffff", opacity: 100 };
+  const folders = p.doc.folders ?? [];
+  const folderIds = new Set(folders.map((f) => f.id));
+  const [menu, setMenu] = useState<{ at: { x: number; y: number }; items: MenuItem[] } | null>(null);
+  const [confirmFolder, setConfirmFolder] = useState<KFolder | null>(null);
+  const gridRow = (g: KGrid, inFolder: boolean) => (
+              <div
+                key={g.id}
+                className={cx(
+                  "group/row flex h-9 items-center gap-1.5 border-b border-stroke-neutral-muted px-1.5",
+                  inFolder && "pl-7",
+                  g.id === p.activeId ? "bg-sky-500/25" : "hover:bg-bg-layer-default-pressed/50",
+                )}
+              >
+                {renaming === g.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={g.name}
+                    aria-label="이름 변경"
+                    onBlur={(e) => {
+                      p.onRename(g.id, e.target.value.trim().slice(0, 40) || g.name);
+                      setRenaming(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    className="h-6 min-w-0 flex-1 rounded-sm bg-bg-layer-default px-1.5 text-[11px] outline-1 outline-stroke-neutral-weak"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className={cx("min-w-0 flex-1 truncate px-1.5 text-left text-[11px]", !g.visible && "text-fg-neutral-subtle")}
+                    title={g.name}
+                    onClick={() => p.onActivate(g.id)}
+                    onDoubleClick={() => setRenaming(g.id)}
+                  >
+                    {g.name}
+                  </button>
+                )}
+                <button
+                  aria-label={g.visible ? "숨기기" : "보이기"}
+                  type="button"
+                  onClick={() => p.onToggle(g.id)}
+                  className={cx(
+                    "size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral",
+                    g.visible ? "hidden" : "flex",
+                  )}
+                >
+                  {g.visible ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+                </button>
+                {(folders.length > 0 || inFolder) && (
+                  <button
+                    aria-label="폴더로 옮기기"
+                    title="폴더로 옮기기"
+                    type="button"
+                    onClick={(e) => {
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      const items: MenuItem[] = folders.filter((f) => f.id !== g.folderId).map((f) => ({ label: `${f.name}(으)로 옮기기`, onSelect: () => p.onMoveGrid(g.id, f.id) }));
+                      if (inFolder) items.push(...(items.length ? (["separator"] as MenuItem[]) : []), { label: "폴더 밖으로 빼기", onSelect: () => p.onMoveGrid(g.id, null) });
+                      setMenu({ at: { x: Math.min(r.left, window.innerWidth - 196), y: r.bottom + 4 }, items });
+                    }}
+                    className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral"
+                  >
+                    <FolderInput className="size-3" />
+                  </button>
+                )}
+                <button
+                  aria-label="이름 변경"
+                  type="button"
+                  onClick={() => setRenaming(g.id)}
+                  className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral"
+                >
+                  <Pencil className="size-3" />
+                </button>
+                <button
+                  aria-label="격자 삭제"
+                  type="button"
+                  onClick={() => p.onDelete(g.id)}
+                  className="mr-0.5 hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-critical"
+                >
+                  <Trash2 className="size-3" />
+                </button>
+              </div>
+  );
 
   return (
     <div className="h-full shrink-0">
@@ -403,69 +491,84 @@ export function RightPanel(p: Props) {
             <div className="relative z-10 h-0">
               <div className="absolute inset-x-0 -top-1.5 h-3" />
             </div>
-            {[...p.doc.grids].reverse().map((g) => (
-              <div
-                key={g.id}
-                className={cx(
-                  "group/row flex h-9 items-center gap-1.5 border-b border-stroke-neutral-muted px-1.5",
-                  g.id === p.activeId ? "bg-sky-500/25" : "hover:bg-bg-layer-default-pressed/50",
-                )}
-              >
-                {renaming === g.id ? (
-                  <input
-                    autoFocus
-                    defaultValue={g.name}
-                    aria-label="이름 변경"
-                    onBlur={(e) => {
-                      p.onRename(g.id, e.target.value.trim().slice(0, 40) || g.name);
-                      setRenaming(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                    className="h-6 min-w-0 flex-1 rounded-sm bg-bg-layer-default px-1.5 text-[11px] outline-1 outline-stroke-neutral-weak"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className={cx("min-w-0 flex-1 truncate px-1.5 text-left text-[11px]", !g.visible && "text-fg-neutral-subtle")}
-                    title={g.name}
-                    onClick={() => p.onActivate(g.id)}
-                    onDoubleClick={() => setRenaming(g.id)}
-                  >
-                    {g.name}
-                  </button>
-                )}
-                <button
-                  aria-label={g.visible ? "숨기기" : "보이기"}
-                  type="button"
-                  onClick={() => p.onToggle(g.id)}
-                  className={cx(
-                    "size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral",
-                    g.visible ? "hidden" : "flex",
-                  )}
-                >
-                  {g.visible ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
-                </button>
-                <button
-                  aria-label="이름 변경"
-                  type="button"
-                  onClick={() => setRenaming(g.id)}
-                  className="hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral"
-                >
-                  <Pencil className="size-3" />
-                </button>
-                <button
-                  aria-label="격자 삭제"
-                  type="button"
-                  onClick={() => p.onDelete(g.id)}
-                  className="mr-0.5 hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-critical"
-                >
-                  <Trash2 className="size-3" />
-                </button>
-              </div>
-            ))}
+            {folders.map((f) => {
+              const members = [...p.doc.grids].reverse().filter((g) => g.folderId === f.id);
+              return (
+                <div key={f.id} role="group" aria-label={f.name}>
+                  <div className="group/row flex h-9 items-center gap-1 border-b border-stroke-neutral-muted px-1.5 hover:bg-bg-layer-default-pressed/50" data-layer-folder={f.id}>
+                    <button
+                      type="button"
+                      aria-label={f.collapsed ? "폴더 펼치기" : "폴더 접기"}
+                      aria-expanded={!f.collapsed}
+                      onClick={() => p.onFolder(f.id, { collapsed: !f.collapsed })}
+                      className="flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted hover:bg-bg-layer-default-pressed"
+                    >
+                      {f.collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+                    </button>
+                    <Folder className={cx("size-3.5 shrink-0", f.visible ? "text-fg-neutral-muted" : "text-fg-neutral-subtle")} />
+                    {renaming === f.id ? (
+                      <input
+                        autoFocus
+                        defaultValue={f.name}
+                        aria-label="폴더 이름 변경"
+                        onBlur={(e) => {
+                          p.onFolder(f.id, { name: e.target.value.trim().slice(0, 40) || f.name });
+                          setRenaming(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          if (e.key === "Escape") setRenaming(null);
+                        }}
+                        className="h-6 min-w-0 flex-1 rounded-sm bg-bg-layer-default px-1.5 text-[11px] outline-1 outline-stroke-neutral-weak"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className={cx("min-w-0 flex-1 truncate px-1 text-left text-[11px] font-semibold", !f.visible && "text-fg-neutral-subtle")}
+                        title={`${f.name} · ${members.length}개`}
+                        onClick={() => p.onFolder(f.id, { collapsed: !f.collapsed })}
+                        onDoubleClick={() => setRenaming(f.id)}
+                      >
+                        {f.name}
+                        <span className="ml-1 font-normal text-fg-neutral-subtle tabular-nums">{members.length}</span>
+                      </button>
+                    )}
+                    <button
+                      aria-label={f.visible ? "폴더 숨기기" : "폴더 표시"}
+                      type="button"
+                      onClick={() => p.onFolder(f.id, { visible: !f.visible })}
+                      className={cx(
+                        "size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral",
+                        f.visible ? "hidden" : "flex",
+                      )}
+                    >
+                      {f.visible ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+                    </button>
+                    <button
+                      aria-label="폴더 메뉴"
+                      type="button"
+                      onClick={(e) => {
+                        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setMenu({
+                          at: { x: Math.min(r.left, window.innerWidth - 196), y: r.bottom + 4 },
+                          items: [
+                            { label: "이름 변경", onSelect: () => setRenaming(f.id) },
+                            { label: "폴더 해제", onSelect: () => p.onUngroup(f.id) },
+                            "separator",
+                            { label: "폴더 삭제", danger: true, onSelect: () => (members.length ? setConfirmFolder(f) : p.onDeleteFolder(f.id)) },
+                          ],
+                        });
+                      }}
+                      className="mr-0.5 hidden size-5 shrink-0 items-center justify-center rounded-sm text-fg-neutral-muted group-focus-within/row:flex group-hover/row:flex hover:bg-bg-layer-default-pressed hover:text-fg-neutral"
+                    >
+                      <Ellipsis className="size-3" />
+                    </button>
+                  </div>
+                  {!f.collapsed && members.map((g) => gridRow(g, true))}
+                </div>
+              );
+            })}
+            {[...p.doc.grids].reverse().filter((g) => !g.folderId || !folderIds.has(g.folderId)).map((g) => gridRow(g, false))}
           </div>
           <div className="relative z-10 h-3">
             <div className="absolute inset-0" />
@@ -542,6 +645,30 @@ export function RightPanel(p: Props) {
           </div>
         </div>
       </aside>
+      <ContextMenu at={menu?.at ?? null} items={menu?.items ?? []} onClose={() => setMenu(null)} />
+      <Dialog
+        open={!!confirmFolder}
+        onClose={() => setConfirmFolder(null)}
+        title="폴더 삭제"
+        footer={
+          <>
+            <Button onClick={() => setConfirmFolder(null)}>취소</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (confirmFolder) p.onDeleteFolder(confirmFolder.id);
+                setConfirmFolder(null);
+              }}
+            >
+              삭제
+            </Button>
+          </>
+        }
+      >
+        <p className="text-[0.875rem] leading-[1.6] text-fg-neutral">
+          폴더와 내부 레이어 {confirmFolder ? p.doc.grids.filter((g) => g.folderId === confirmFolder.id).length : 0}개가 함께 삭제돼요. 계속할까요? 실행 취소로 되돌릴 수 있어요.
+        </p>
+      </Dialog>
     </div>
   );
 }

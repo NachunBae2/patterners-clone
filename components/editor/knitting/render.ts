@@ -1,5 +1,5 @@
 // SVG markup for knitting grids — shared by the live canvas, export and thumbnails.
-import { knitSymbol, symbolDefs, symbolSvg } from "@/lib/symbols/knitting";
+import { knitSymbol, registerCustomGlyphs, symbolDefs, symbolSvg } from "@/lib/symbols/knitting";
 import { lightness, numberingOf, rowOwners, type Geo, type KDoc, type KGrid } from "./model";
 
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -170,6 +170,7 @@ export function gridPad(geo: Geo) {
 
 /** Standalone SVG of the visible grids, tight bounds + 24px margin. */
 export function buildSvg(doc: KDoc, geo: Geo, opts: { numbers?: boolean; labels?: boolean; legend?: boolean; background?: string } = {}) {
+  registerCustomGlyphs(doc.glyphs);
   const grids = doc.grids.filter((g) => g.visible);
   if (!grids.length) return null;
   const numbers = opts.numbers !== false;
@@ -220,6 +221,7 @@ export function buildSvg(doc: KDoc, geo: Geo, opts: { numbers?: boolean; labels?
 
 /** Small thumbnail SVG fitted into 320×240 (colours only for very large charts). */
 export function buildThumb(doc: KDoc, geo: Geo) {
+  registerCustomGlyphs(doc.glyphs);
   const grids = doc.grids.filter((g) => g.visible);
   if (!grids.length) return undefined;
   const total = grids.reduce((n, g) => n + g.cols * g.rows, 0);

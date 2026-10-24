@@ -280,3 +280,71 @@ export const Lasso = L(
     <circle cx="5" cy="16" r="2" />
   </>,
 );
+export const Folder = L("folder", <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />);
+export const FolderInput = L(
+  "folder-input",
+  <>
+    <path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1" />
+    <path d="M2 13h10" />
+    <path d="m9 16 3-3-3-3" />
+  </>,
+);
+export const Ellipsis = L(
+  "ellipsis",
+  <>
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+    <circle cx="5" cy="12" r="1" />
+  </>,
+);
+export const Copy = L(
+  "copy",
+  <>
+    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+  </>,
+);
+export const Send = L(
+  "send",
+  <>
+    <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+    <path d="m21.854 2.147-10.94 10.939" />
+  </>,
+);
+export const Upload = L(
+  "upload",
+  <>
+    <path d="M12 3v12" />
+    <path d="m17 8-5-5-5 5" />
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+  </>,
+);
+export const Minus = L("minus", <path d="M5 12h14" />);
+export const Slash = L("slash", <path d="M5 19 19 5" />);
+export const Square = L("square", <rect width="18" height="18" x="3" y="3" rx="2" />);
+export const Circle = L("circle", <circle cx="12" cy="12" r="9" />);
+export const Triangle = L("triangle", <path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />);
+export const Type = L(
+  "type",
+  <>
+    <path d="M12 4v16" />
+    <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+    <path d="M9 20h6" />
+  </>,
+);
+export const PenLine = L(
+  "pen-line",
+  <>
+    <path d="M13 21h8" />
+    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+  </>,
+);
+export const PaintBucket = L(
+  "paint-bucket",
+  <>
+    <path d="M11 7 6 2" />
+    <path d="M18.992 12H2.041" />
+    <path d="M21.145 18.38A3.34 3.34 0 0 1 20 16.5a3.3 3.3 0 0 1-1.145 1.88c-.575.46-.855 1.02-.855 1.595A2 2 0 0 0 20 22a2 2 0 0 0 2-2.025c0-.58-.285-1.13-.855-1.595" />
+    <path d="m8.5 4.5 2.148-2.148a1.205 1.205 0 0 1 1.704 0l7.296 7.296a1.205 1.205 0 0 1 0 1.704l-7.592 7.592a3.615 3.615 0 0 1-5.112 0l-3.888-3.888a3.615 3.615 0 0 1 0-5.112L5.67 7.33" />
+  </>,
+);

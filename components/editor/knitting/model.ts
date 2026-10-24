@@ -1,6 +1,6 @@
 // Pure helpers for the knitting chart document: geometry, cell edits, block ops.
 import { uid } from "@/lib/id";
-import { knitSymbol } from "@/lib/symbols/knitting";
+import { knitSymbol, type CustomGlyph } from "@/lib/symbols/knitting";
 import type { KnitCell, KnitData, KnitGrid } from "@/lib/types";
 
 /** chart cell: 28px tall; stitches are 37px wide unless the gauge sets the aspect */
@@ -28,8 +28,17 @@ export type RowSides = { worked: "flat" | "round"; firstRowSide: "RS" | "WS" };
 export const DEFAULT_ROW_SIDES: RowSides = { worked: "flat", firstRowSide: "RS" };
 
 // Optional fields this editor stores alongside the shared types.
-export type KGrid = KnitGrid & { numbering?: Numbering; sides?: RowSides };
-export type KDoc = Omit<KnitData, "grids"> & { grids: KGrid[]; gaugeOn?: boolean; bg?: { color: string; opacity: number } };
+export type KGrid = KnitGrid & { numbering?: Numbering; sides?: RowSides; folderId?: string };
+/** layer folder ("폴더") in the right panel; grids point at it with folderId */
+export type KFolder = { id: string; name: string; visible: boolean; collapsed?: boolean };
+export type KDoc = Omit<KnitData, "grids"> & {
+  grids: KGrid[];
+  gaugeOn?: boolean;
+  bg?: { color: string; opacity: number };
+  folders?: KFolder[];
+  /** user-drawn symbols used by this document (copied in on save so the chart renders anywhere) */
+  glyphs?: CustomGlyph[];
+};
 
 export type Geo = { cw: number; ch: number };
 /** gauge off: fixed 37 × 28 cells; gauge on: the cell aspect follows stitches/rows per 10cm */
