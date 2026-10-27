@@ -361,6 +361,8 @@ export function paintFabric(cv: HTMLCanvasElement, ch0: PChart, cw: number, chh:
 
 type WinSize = "float" | "half" | "full";
 const ZOOMS = [0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4];
+/** "fit" treats charts shorter than this as this tall (the knitting editor's new-grid height) */
+const FIT_MIN_ROWS = 20;
 
 function Icon({ d, className }: { d: ReactNode; className?: string }) {
   return (
@@ -441,8 +443,12 @@ export function KnitPreviewWindow(p: KnitPreviewProps) {
 
   const fitScale = useMemo(() => {
     if (!chart || !box.w) return 1;
-    // base cell: 22px wide; fit leaves room for the fabric margin
-    const cw = Math.min((box.w - 24) / (chart.cols + 2.4), (box.h - 24) / ((chart.rows + 2.4) * aspect));
+    // base cell: 22px wide; fit leaves room for the fabric margin.
+    // A short chart (1–2 rows) would otherwise blow up to fill the window and its purl bumps
+    // clump into big blobs; fit it as if it were at least as tall as a new chart (20 rows),
+    // so it keeps the same stitch size as taller charts in the same window.
+    const rows = Math.max(chart.rows, FIT_MIN_ROWS);
+    const cw = Math.min((box.w - 24) / (chart.cols + 2.4), (box.h - 24) / ((rows + 2.4) * aspect));
     return Math.max(0.1, cw / 22);
   }, [chart, box, aspect]);
   const scale = zoom ?? Math.min(fitScale, 4);
