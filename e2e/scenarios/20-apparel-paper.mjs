@@ -141,6 +141,18 @@ export const scenarios = [
       await page.getByRole("radio", { name: "래글런" }).first().click();
       await t.sleep(200);
       t.expect(await t.has(/래글런선/), "래글런: 래글런선 줄임 단계");
+      const dimHits = await page.evaluate(() => {
+        const svg = [...document.querySelectorAll("svg")].find((s) => s.querySelector(".ap-dim"));
+        const r = [...(svg?.querySelectorAll(".ap-dim text") ?? [])].map((e) => [e.textContent, e.getBoundingClientRect()]);
+        const hits = [];
+        for (let i = 0; i < r.length; i++)
+          for (let j = i + 1; j < r.length; j++) {
+            const [a, b] = [r[i][1], r[j][1]];
+            if (Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)) hits.push(`${r[i][0]} / ${r[j][0]}`);
+          }
+        return { n: r.length, hits };
+      });
+      t.expect(dimHits.n > 0 && dimHits.hits.length === 0, `래글런: 치수 글자끼리 겹치지 않음 (${dimHits.hits.join(", ") || `${dimHits.n}개`})`);
 
       // shaping steps show the 2-1-3 notation and add up
       const steps = await page.locator('[data-piece="back"] ol li').allInnerTexts();

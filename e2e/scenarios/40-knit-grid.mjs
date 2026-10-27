@@ -288,6 +288,37 @@ export const scenarios = [
     },
   },
   {
+    id: "F22c",
+    feature: "실체화 (β)",
+    name: "2단짜리 짧은 차트도 20단 차트와 같은 코 크기로 그린다",
+    async run(t) {
+      const id = await newKnit(t);
+      const zoomAt = async (rows) => {
+        await t.page.evaluate(
+          ({ id, rows }) => {
+            const k = `pt:work:${id}`;
+            const w = JSON.parse(localStorage.getItem(k));
+            const g = w.grids[0];
+            g.rows = rows;
+            g.cols = 10;
+            g.cells = Array.from({ length: rows * 10 }, () => ({ symbol: "k_purl" }));
+            localStorage.setItem(k, JSON.stringify(w));
+          },
+          { id, rows },
+        );
+        await reload(t);
+        await railBtn(t, "실체화 (β)").click();
+        await t.sleep(900);
+        const z = await t.page.locator("[data-knit-preview]").getByLabel("화면에 맞추기").innerText();
+        await t.click("[aria-label='차트로 돌아가기']");
+        return z;
+      };
+      const tall = await zoomAt(20);
+      const short = await zoomAt(2);
+      t.expect(tall === short, `맞춤 배율이 같음 (20단 ${tall}, 2단 ${short})`);
+    },
+  },
+  {
     id: "F22b",
     feature: "실체화 (β)",
     name: "격자가 없으면 빈 상태 안내",

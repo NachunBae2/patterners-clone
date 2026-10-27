@@ -41,7 +41,14 @@ export function layout(dr: Draft) {
   return { placed, width: x - GAP + MARGIN, height: H + MARGIN * 2 };
 }
 
-const toSvg = (pl: Placed, [x, y]: [number, number]): [number, number] => [(pl.x + x) * PX, (pl.y + pl.h - y) * PX];
+/** rough width (svg units) of a dimension label at the .ap-dim font size: Hangul ≈ 1em, digits/latin ≈ 0.6em */
+function textWidth(s: string) {
+  let em = 0;
+  for (const ch of s) em += /[ㄱ-힝]/.test(ch) ? 1 : /[\s.·]/.test(ch) ? 0.32 : 0.6;
+  return em * 2 * PX;
+}
+
+const toSvg =(pl: Placed, [x, y]: [number, number]): [number, number] => [(pl.x + x) * PX, (pl.y + pl.h - y) * PX];
 
 function hDim(x1: number, x2: number, y: number, label: string, above = false) {
   const t = 1.2 * PX;
@@ -138,7 +145,14 @@ export function sheetSvg(d: ApparelData, dr: Draft, opts: SheetOpts = {}) {
         }
         if (p.widths.neck > 0 && p.symmetric) {
           const [n0, n1] = xs(p.widths.neck);
-          out.push(hDim(n0, n1, top + 3 * PX, `목 ${lab(full(p.widths.neck))}`));
+          if (d.style === "raglan" && p.id === "front" && p.marks.neck < p.rows) {
+            // Raglan has no shoulder line, so the neck opening is the whole top edge and the 앞목 depth
+            // label (centred on the depth line, often longer than it) runs right through a neck width
+            // drawn inside it. Put the neck width above the piece, clear of that label's upper end.
+            const ny = (pl.y + pl.h - p.marks.neck / dr.gr) * PX;
+            const depthTop = (ny + top) / 2 - textWidth(`앞목 ${labR(p.rows - p.marks.neck)}`) / 2;
+            out.push(hDim(n0, n1, Math.min(top - 3 * PX, depthTop - 1.5 * PX), `목 ${lab(full(p.widths.neck))}`, true));
+          } else out.push(hDim(n0, n1, top + 3 * PX, `목 ${lab(full(p.widths.neck))}`));
         }
       }
       // heights
