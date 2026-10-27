@@ -415,7 +415,17 @@ export const scenarios = [
       t.expect(/^patterners-backup-\d{8}\.json$/.test(dl.suggestedFilename()), "파일 이름");
       t.expect(json.format === "patterners-backup" && json.works.length === 2, "백업에 도안 2개");
       t.expect(JSON.stringify(json.works.find((w) => w.id === g.id).data.pages[0].cells) === JSON.stringify(g.cells), "백업에 칸 데이터");
-      await dialog(t).getByRole("button", { name: "삭제", exact: true }).click(); // confirm accepted by the runner
+      let nativeDialog = false;
+      t.page.once("dialog", () => (nativeDialog = true));
+      await dialog(t).getByRole("button", { name: "삭제", exact: true }).click();
+      const ask = dialog(t).filter({ hasText: "모든 로컬 데이터 삭제" }).filter({ has: t.page.getByRole("button", { name: "취소" }) });
+      await ask.waitFor({ timeout: 3000 });
+      await ask.getByRole("button", { name: "취소" }).click();
+      await t.sleep(300);
+      t.expect((await dialog(t).count()) === 1 && (await t.works()).length === 2, "확인 창에서 취소 → 계정 설정만 남고 도안 그대로");
+      await dialog(t).getByRole("button", { name: "삭제", exact: true }).click();
+      await ask.getByRole("button", { name: "삭제", exact: true }).click();
+      t.expect(!nativeDialog, "브라우저 기본 확인 창 대신 앱 안 확인 창");
       await t.page.waitForURL(/\/home/);
       await t.sleep(1500);
       t.expect((await t.works()).length === 0, "전체 삭제 → 도안 0개");
@@ -459,6 +469,7 @@ export const scenarios = [
       const keysBefore = await t.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("pt:")));
       t.expect(["pt:works", "pt:atelier", "pt:profile", "pt:notifications"].every((k) => keysBefore.includes(k)), "삭제 전 데이터 있음");
       await dialog(t).getByRole("button", { name: "삭제", exact: true }).click();
+      await dialog(t).last().getByRole("button", { name: "삭제", exact: true }).click(); // in-app confirm
       await t.page.waitForURL(/\/home/);
       await t.sleep(1500);
       const keysAfter = await t.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("pt:")));
